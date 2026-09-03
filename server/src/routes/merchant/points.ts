@@ -38,12 +38,11 @@ pointsRouter.post(
     const s = store(req);
     const input = parseBody(lookupSchema, req);
 
-    let membershipId: string | null = null;
-    if (input.qrToken) {
-      const payload = verifyQrToken(input.qrToken);
-      if (payload.mid !== s.merchantId) throw notFound('That code is not for your rewards programme.');
-      membershipId = payload.mem;
-    }
+    // A scanned code resolves to a membership id, which is then looked up
+    // through the tenant-scoped store: a code from another shop's programme
+    // finds nothing here, so it reads as "no member" rather than leaking that
+    // the customer is a member somewhere else.
+    const membershipId = input.qrToken ? verifyQrToken(input.qrToken).membershipId : null;
 
     const row = membershipId
       ? s.queryOne<Record<string, any>>(

@@ -141,7 +141,7 @@ customerRouter.get(
     const membership = ownMembership(customerId, merchant.id);
     const ttlSeconds = 120;
     res.json({
-      token: signQrToken(membership.id, merchant.id, ttlSeconds),
+      token: signQrToken(membership.id, ttlSeconds),
       memberNumber: membership.member_number,
       expiresInSeconds: ttlSeconds,
     });
