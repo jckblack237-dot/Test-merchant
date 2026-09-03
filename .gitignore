@@ -12,3 +12,11 @@ data/
 *.sqlite-shm
 coverage/
 .vite/
+
+# Stray tsc output. The app source trees are TypeScript only — Vite resolves an
+# extension-less import to a sibling .js before the .tsx, so a leftover compiled
+# file silently shadows the real source.
+apps/*/src/**/*.js
+apps/*/src/**/*.jsx
+apps/*/src/**/*.d.ts
+*.tsbuildinfo

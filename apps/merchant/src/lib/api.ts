@@ -117,6 +117,43 @@ export async function api<T = unknown>(path: string, options: RequestOptions = {
   return payload as T;
 }
 
+/**
+ * Downloads a file from an authenticated endpoint.
+ *
+ * A plain <a href> cannot carry the bearer token, so the response is fetched
+ * through the same client (refresh-on-401 included) and handed to the browser
+ * as an object URL.
+ */
+export async function downloadFile(path: string, filename: string, retry = true): Promise<void> {
+  const headers: Record<string, string> = {};
+  if (accessToken) headers.authorization = `Bearer ${accessToken}`;
+
+  const response = await fetch(`/api${path}`, { headers });
+
+  if (response.status === 401 && retry) {
+    if (await refreshSession()) return downloadFile(path, filename, false);
+  }
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new ApiError(
+      response.status,
+      payload?.error?.code ?? 'error',
+      payload?.error?.message ?? 'Download failed.',
+    );
+  }
+
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  // Revoking synchronously cancels the download before the browser has read the
+  // blob, so hand the object URL back on a later tick instead.
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+
 /** Restores a session from the stored refresh token on app start. */
 export async function restoreSession(): Promise<boolean> {
   if (accessToken) return true;

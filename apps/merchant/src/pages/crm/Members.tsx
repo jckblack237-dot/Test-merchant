@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { api, type Member } from '../../lib/api';
+import { api, downloadFile, type Member } from '../../lib/api';
 import { useSession } from '../../lib/session';
 import {
   Empty, ErrorNote, Loading, Modal, formatMoney, formatNumber, formatRelative, initials,
@@ -24,6 +24,7 @@ export function Members() {
   const [sort, setSort] = useState<string>('recent');
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const load = useCallback(async () => {
     const params = new URLSearchParams({ sort, limit: '100' });
@@ -69,9 +70,27 @@ export function Members() {
         </div>
 
         <div className="row">
-          <a className="btn btn--ghost btn--sm" href="/api/merchant/members/export/csv" download>
-            Export CSV
-          </a>
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            disabled={exporting}
+            onClick={async () => {
+              setExporting(true);
+              setError(null);
+              try {
+                await downloadFile(
+                  '/merchant/members/export/csv',
+                  `members-${new Date().toISOString().slice(0, 10)}.csv`,
+                );
+              } catch (caught) {
+                setError(describeError(caught));
+              } finally {
+                setExporting(false);
+              }
+            }}
+          >
+            {exporting ? 'Preparing…' : 'Export CSV'}
+          </button>
           <button
             type="button"
             className="btn btn--sm"
