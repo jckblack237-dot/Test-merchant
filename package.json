@@ -1,0 +1,25 @@
+{
+  "name": "loyaltyloop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "LoyaltyLoop — multi-tenant customer retention & loyalty platform sold as a SaaS subscription",
+  "workspaces": [
+    "server",
+    "apps/merchant",
+    "apps/customer"
+  ],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "dev": "npm run dev --workspace server & npm run dev --workspace apps/merchant & npm run dev --workspace apps/customer & wait",
+    "dev:server": "npm run dev --workspace server",
+    "dev:merchant": "npm run dev --workspace apps/merchant",
+    "dev:customer": "npm run dev --workspace apps/customer",
+    "build": "npm run build --workspace server && npm run build --workspace apps/merchant && npm run build --workspace apps/customer",
+    "start": "npm run start --workspace server",
+    "seed": "npm run seed --workspace server",
+    "test": "npm run test --workspace server",
+    "typecheck": "npm run typecheck --workspace server && npm run typecheck --workspace apps/merchant && npm run typecheck --workspace apps/customer"
+  }
+}
