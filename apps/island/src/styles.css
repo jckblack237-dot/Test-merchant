@@ -14,11 +14,15 @@
   color-scheme: light dark;
 
   /* Greys — Apple's neutral ramp. Note --bg is warmer than white; surfaces are
-     pure white and sit *above* it. That inversion is what makes cards read. */
+     pure white and sit *above* it. That inversion is what makes cards read.
+     The ramp has to keep stepping below the page: --surface-2 once held --bg's
+     own value, so a segmented track sitting on the page ground had nothing to
+     read against, and --surface-3 was close enough to white that a switch had
+     no off state and a meter no track. Each step is now a perceptible one. */
   --bg:            #f5f5f7;
   --surface:       #ffffff;
-  --surface-2:     #f5f5f7;
-  --surface-3:     #ebebed;
+  --surface-2:     #e5e5ea;
+  --surface-3:     #d1d1d6;
   --hairline:      rgba(0, 0, 0, 0.10);
   --hairline-soft: rgba(0, 0, 0, 0.06);
   --text:          #1d1d1f;
@@ -45,7 +49,7 @@
   --map-sea:       #eceef1;
   --map-sea-deep:  #e3e6ea;
   --map-land:      #ffffff;
-  --map-contour:   rgba(0, 0, 0, 0.07);
+  --map-contour:   rgba(0, 0, 0, 0.05);
   --map-trail:     rgba(0, 0, 0, 0.16);
   --map-label:     #1d1d1f;
   --map-label-dim: #86868b;
@@ -91,11 +95,15 @@
     --negative:      #ff453a;  --negative-soft: rgba(255, 69, 58, 0.18);
     --info:          #0a84ff;  --info-soft:     rgba(10, 132, 255, 0.18);
 
-    --map-sea:       #141416;
-    --map-sea-deep:  #0d0d0f;
-    --map-land:      #1c1c1e;
-    --map-contour:   rgba(255, 255, 255, 0.08);
-    --map-trail:     rgba(255, 255, 255, 0.18);
+    /* Land at --surface over sea at #141416 was an eight-point separation: the
+       island simply was not there, and a map with no silhouette is a texture.
+       The water drops to near-black and the land lifts well clear of it, which
+       also gives the label halos something to cut into. */
+    --map-sea:       #09090b;
+    --map-sea-deep:  #050506;
+    --map-land:      #2a2a2d;
+    --map-contour:   rgba(255, 255, 255, 0.07);
+    --map-trail:     rgba(255, 255, 255, 0.48);
     --map-label:     #f5f5f7;
     --map-label-dim: #8e8e93;
     --map-ring-done: rgba(255, 255, 255, 0.26);
@@ -171,7 +179,6 @@ h3, h4 { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
 /* The uppercase eyebrow. One definition, shared by every small label so they
    all sit on the same optical line. */
 .eyebrow,
-.field__label,
 .stat__label,
 .meter__label,
 .kv__key,
@@ -186,9 +193,22 @@ h3, h4 { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
 
 .eyebrow { display: block; }
 
-/* A list of statements, not a bulleted paragraph. The marker is a hairline dash
-   set in the gutter, which reads as structure without the browser disc that
-   drags the whole block back to a 1996 document. */
+/* A form label is not a section header. Set in caps it shouts at the same pitch
+   as every overline on the page, so nothing leads and "CONSTRAINTS, ONE PER
+   LINE" arrives as a demand; sentence case at 13px reads as the quiet
+   instruction it is. */
+.field__label {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+  letter-spacing: -0.005em;
+  text-transform: none;
+  color: var(--text-muted);
+}
+
+/* A list of statements, not a bulleted paragraph. One marker treatment across
+   the whole report: a small dot in the gutter, and every line of an item — the
+   first one included — hanging off the same left edge. */
 .bullets {
   list-style: none;
   margin: 0;
@@ -203,14 +223,41 @@ h3, h4 { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
   line-height: 1.5;
 }
 
+/* A dash set in the gutter reads as a stray hyphen at the head of a sentence.
+   A 3px disc reads as a marker. */
 .bullets > li::before {
   content: '';
   position: absolute;
-  left: 0;
-  top: 0.72em;
-  width: 7px;
-  height: 1px;
+  left: 3px;
+  top: 0.62em;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
   background: var(--text-faint);
+}
+
+/* Where the order is the point — recommendations, an action plan — the marker
+   says so. Same gutter, same colour, so the two lists still read as one family. */
+ol.bullets > li { padding-left: 24px; }
+
+ol.bullets > li::before {
+  content: counter(list-item) '.';
+  left: 0;
+  top: 0;
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  background: none;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A severity chip inline at the head of a bullet indents the first line past
+   every line beneath it, so the item has two left edges. Floated out of the
+   flow it becomes a right-hand marker and the text keeps one. */
+.bullets > li > .pill:first-child {
+  float: right;
+  margin: 1px 0 3px 12px;
 }
 
 /* --- Layout -------------------------------------------------------------- */
@@ -286,9 +333,9 @@ a.card:hover, .card.clickable:hover { box-shadow: var(--shadow); transform: tran
    click and then refuses it. An unavailable action should look like a different
    thing entirely: neutral, flat, obviously not waiting for you. */
 .btn:disabled {
-  background: var(--surface-3);
+  background: var(--surface-2);
   border-color: transparent;
-  color: var(--text-faint);
+  color: var(--text-muted);
   cursor: not-allowed;
   transform: none;
 }
@@ -352,7 +399,20 @@ a.card:hover, .card.clickable:hover { box-shadow: var(--shadow); transform: tran
 }
 
 .input::placeholder, .textarea::placeholder { color: var(--text-faint); }
-.textarea { min-height: 96px; resize: vertical; line-height: 1.5; }
+
+/* The browser's diagonal grab handle is the last piece of OS chrome on the
+   page. Dragging still works — the corner is simply not drawn — and where the
+   engine can size a field to its own content the field grows on its own and
+   nobody has to drag anything. */
+.textarea {
+  min-height: 96px;
+  max-height: 50vh;
+  resize: vertical;
+  field-sizing: content;
+  line-height: 1.5;
+}
+
+.textarea::-webkit-resizer { display: none; }
 .select {
   appearance: none;
   padding-right: 34px;
@@ -447,11 +507,22 @@ a:focus-visible {
 
 .tab:hover { color: var(--text); }
 
+/* One weight across both states. Selecting a segment used to reset the label
+   from 500 to 560, so the whole control reflowed a pixel or two on every tap;
+   the chip and its shadow are what move. */
 .tab[aria-selected='true'] {
   background: var(--surface);
   color: var(--text);
-  font-weight: 560;
   box-shadow: var(--shadow-sm);
+}
+
+/* The same control, re-checked on the other ramp. In dark a raised chip has to
+   be lighter than the track it sits in — at --surface it is darker, and on a
+   card it is the card, so the selected segment reads as a hole rather than as
+   the thing that is selected. The track stays put: it works on both the black
+   page and a raised card. */
+@media (prefers-color-scheme: dark) {
+  .tab[aria-selected='true'] { background: var(--surface-3); }
 }
 
 /* --- Pills, chips, state ------------------------------------------------- */
@@ -475,7 +546,12 @@ a:focus-visible {
 .pill--warning { background: var(--warning-soft); color: var(--warning); }
 .pill--info { background: var(--info-soft); color: var(--info); }
 .pill--muted { background: var(--surface-2); color: var(--text-muted); }
-.pill--brand { background: var(--accent-soft); color: var(--accent); }
+
+/* Every core agent on a mission carries this pill, so nine of them land in one
+   row. Painted in the accent they were a blue stripe across the page saying
+   nothing per-chip — the accent is for actions. On and off are told apart by
+   ink and weight instead, which is what a row of identical things needs. */
+.pill--brand { background: var(--surface-2); color: var(--text); font-weight: 560; }
 
 /* Verified and high risk are judgements, so they carry colour. An estimate is
    only an absence of evidence — it stays neutral and lets its 🟡 do the work. */
@@ -519,16 +595,30 @@ a:focus-visible {
 
 .alert--warning { background: var(--warning-soft); color: var(--warning); }
 
+/* The notice that stops a simulated run being read as research, so it has to be
+   unmissable — but by sitting above the fold with a mark and a lead sentence,
+   not by being the most saturated thing on the screen. Painted end to end in
+   amber it was an alert box; a quiet card with a warning mark is a disclosure,
+   and a reader will actually read the paragraph. */
 .sim-notice {
   display: flex;
   gap: 10px;
   align-items: flex-start;
   padding: 13px 16px;
   border-radius: var(--radius);
-  background: var(--warning-soft);
-  color: var(--warning);
+  border: 1px solid color-mix(in srgb, var(--warning) 30%, transparent);
+  background: color-mix(in srgb, var(--warning) 6%, var(--surface));
+  color: var(--text-muted);
   font-size: 14px;
 }
+
+/* Colour stays on the two things that have to be seen first. */
+.sim-notice > svg { color: var(--warning); margin-top: 1px; }
+.sim-notice strong { color: var(--warning); font-weight: 600; }
+
+/* Where the notice is a single sentence it is its own lead, so it keeps full
+   ink rather than being set as somebody's supporting copy. */
+.sim-notice > span { color: var(--text); }
 
 .empty { padding: 56px 20px; text-align: center; color: var(--text-faint); }
 
@@ -652,10 +742,18 @@ a:focus-visible {
   align-items: center;
   gap: 18px;
   min-height: 52px;
-  padding: 0 22px;
-  background: color-mix(in srgb, var(--surface) 72%, transparent);
-  backdrop-filter: saturate(180%) blur(20px);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  /* Full-bleed glass, centred contents. The bar has to reach both window edges
+     for its hairline to read as the edge of the chrome, but its brand and links
+     belong on `.app__main`'s 1200px measure — held at a flat 22px they started
+     120px left of every element on the page they sit over. Inset padding is the
+     same measure without a wrapper element in the markup. */
+  padding: 0 max(22px, calc((100% - 1200px) / 2 + 22px));
+  /* 72% let body copy scroll under the bar and stay plainly legible through it,
+     which reads as a rendering fault rather than as glass. Text passing beneath
+     should be diffused to a suggestion of movement. */
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: saturate(180%) blur(30px);
+  -webkit-backdrop-filter: saturate(180%) blur(30px);
   border-bottom: 1px solid var(--hairline-soft);
 }
 
@@ -720,8 +818,9 @@ a:focus-visible {
 .app__user { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text-muted); }
 .app__main { flex: 1; width: 100%; max-width: 1200px; margin: 0 auto; padding: 28px 22px 72px; }
 
+/* Chrome above and chrome below share the content's left edge. */
 .app__footer {
-  padding: 24px 22px;
+  padding: 24px max(22px, calc((100% - 1200px) / 2 + 22px));
   border-top: 1px solid var(--hairline-soft);
   color: var(--text-faint);
   font-size: 12.5px;
@@ -800,10 +899,18 @@ a:focus-visible {
 .island-map__ridge {
   fill: none;
   stroke: var(--map-contour);
-  stroke-width: 0.15;
+  stroke-width: 0.13;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+
+/* Five rings is a drawing of water, which is the squiggle read coming back in
+   another hand — and the widest offshore one runs past the frame, so it
+   terminates in mid-air at both edges. One ring of bathymetry and two of relief
+   are enough to suggest depth. Any ring the map stops drawing on its own simply
+   leaves these selectors matching nothing. */
+.island-map__waves .island-map__wave:nth-child(n + 2),
+.island-map__contours .island-map__contour:nth-child(n + 3) { display: none; }
 
 .island-map__surf { fill: none; stroke: var(--hairline); stroke-width: 0.25; stroke-linejoin: round; }
 .island-map__shore { fill: var(--map-land); stroke: none; }
@@ -823,6 +930,15 @@ a:focus-visible {
   stroke-width: 0.45;
   stroke-dasharray: none;
   opacity: 1;
+}
+
+/* The trails are the only thing making this a graph rather than a scatter of
+   circles. A 0.3 hairline at 60% survives on a light sea and disappears into a
+   dark one, so dark mode carries the dormant ones a little heavier. The active
+   trail is excluded by name: it is already at full weight, and a bare
+   `.island-map__trail` here would win on source order and pull it back down. */
+@media (prefers-color-scheme: dark) {
+  .island-map__trail:not(.island-map__trail--active) { stroke-width: 0.38; opacity: 0.75; }
 }
 
 .island-map__packet-trail {
@@ -959,12 +1075,23 @@ a:focus-visible {
 .island-hut:focus-visible .island-hut__focus { stroke-width: 1.2; }
 
 /* The badge is the only place the state colour is allowed to fill: it is a
-   marker, and a marker has to survive being 2 map units across. */
-.island-hut__badge-disc { fill: var(--badge); stroke: var(--map-land); stroke-width: 0.3; }
+   marker, and a marker has to survive being 2 map units across.
+
+   Drawn at r 1.4 against a 3.6 station it was very nearly the size of the glyph
+   it annotates, and eight of them turned a desaturated diagram into a row of
+   notification dots. It is punctuation: it confirms what the station says, it
+   does not compete with it. The radius is set here rather than on the element
+   so the mark inside it can be kept in proportion at both type sizes. */
+.island-hut__badge-disc {
+  r: 0.95px;
+  fill: var(--badge);
+  stroke: var(--map-land);
+  stroke-width: 0.22;
+}
 
 .island-hut__badge-mark {
   font-family: var(--font);
-  font-size: 2.2px;
+  font-size: 1.5px;
   font-weight: 700;
   text-anchor: middle;
   dominant-baseline: central;
@@ -1024,7 +1151,8 @@ text.island-hut__emoji { display: none; }
    grow in map units to stay readable. */
 @media (max-width: 560px) {
   .island-hut__name { font-size: 2.8px; stroke-width: 0.75px; }
-  .island-hut__badge-mark { font-size: 2.7px; }
+  .island-hut__badge-disc { r: 1.15px; }
+  .island-hut__badge-mark { font-size: 1.85px; }
   .island-map__svg { max-height: none; }
 }
 
@@ -1045,8 +1173,11 @@ text.island-hut__emoji { display: none; }
 .stage-rail__step { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
 .stage-rail__dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--surface-3); }
 
+/* Once a mission finishes every step is done, so a green dot on each of them is
+   a band of colour that distinguishes nothing. Done is simply behind you: it is
+   told in ink, and the colour is kept for the step that is live. */
 .stage-rail__step.is-done { color: var(--text-muted); }
-.stage-rail__step.is-done .stage-rail__dot { background: var(--positive); }
+.stage-rail__step.is-done .stage-rail__dot { background: var(--text-muted); }
 
 .stage-rail__step.is-current { color: var(--text); font-weight: 560; }
 .stage-rail__step.is-current .stage-rail__dot { background: var(--accent); animation: island-blink 2.4s var(--ease) infinite; }
@@ -1097,9 +1228,35 @@ text.island-hut__emoji { display: none; }
 }
 
 label.agent-card { cursor: pointer; }
-.agent-card--off { opacity: 0.55; }
+
+/* Cards in a row are stretched to the tallest of them, so an action sitting
+   directly under its own description leaves a row of buttons stepping up and
+   down by 26px. Pinning the last element that holds one drops every action in
+   the row onto a single line. */
+.agent-card > :last-child:has(.btn) { margin-top: auto; }
+
+/* Whether an agent can reach the web is a capability, not an action. The accent
+   is what the reader is invited to click, and it is not clickable here. */
+.agent-card .pill--info { background: var(--surface-2); color: var(--text-muted); }
+
+/* Switched off is a state, not damage. Dimming the whole card took the agent's
+   own name to roughly 45% — under AA on a dark surface — while the one thing
+   that stayed vivid was a tinted capability chip, so the quietest card on the
+   page shouted its least important line. The name now holds full ink and only
+   the supporting copy steps back. Set after the rule above so every chip in an
+   off card steps back together. */
+.agent-card--off .agent-card__name { color: var(--text); }
+.agent-card--off .agent-card__body,
+.agent-card--off .agent-card__role { color: var(--text-faint); }
+.agent-card--off .agent-card__emoji { opacity: 0.55; }
+.agent-card--off .pill { background: var(--surface-2); color: var(--text-faint); }
+
 .agent-card.is-selected { border-color: var(--accent); box-shadow: var(--shadow-sm), 0 0 0 3px var(--accent-soft); }
 .agent-card__head { display: flex; align-items: flex-start; gap: 12px; }
+
+/* The toggle is a sibling of the title, not an overlay on it: given no width of
+   its own it collapses and a wrapped agent name runs underneath it. */
+.agent-card__head .switch { flex: none; }
 
 /* The avatar is a quiet squircle holding a line glyph — not a coloured tile,
    and not a place for an emoji to sit at 17px. */
@@ -1239,6 +1396,19 @@ label.agent-card { cursor: pointer; }
   .app__main { padding: 20px 16px 60px; }
   .app__user { display: none; }
   .card { padding: 18px; }
+
+  /* A finger is about 44px across whatever the control looks like. Buttons at
+     33px and nav links at 32px are aimed at a mouse; the height goes into the
+     hit area, and the pill keeps the shape it already had. */
+  .btn { min-height: 44px; }
+  .app__link { display: inline-flex; align-items: center; min-height: 44px; }
+
+  /* The switch is the worst of them: a 26px target. The label around it grows
+     to 44px and swallows the taps, while the track it draws stays 44×26 — an
+     iOS switch is that size on an iPhone too, it just has more room to be hit
+     in than it is drawn in. */
+  .switch { min-height: 44px; }
+  .agent-card__head .switch { align-self: center; }
   .modal { padding: 20px; border-radius: var(--radius-lg); }
   .table th, .table td { padding: 12px 14px; }
   .mission-item { align-items: flex-start; flex-wrap: wrap; padding: 14px 16px; }

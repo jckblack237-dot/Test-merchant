@@ -26,8 +26,12 @@ export function SignIn({ onSignedIn }: { onSignedIn: (session: SessionPayload) =
     <div className="auth-page">
       <div className="auth-card stack stack--lg">
         <div className="stack stack--sm center">
-          <span className="app__mark app__mark--lg" aria-hidden="true">
-            <IslandMark size={22} />
+          {/* The mark sits on the page ground rather than in a tile: the tile is
+              --surface-2, which is this page's own background in light and a
+              raised square in dark, so the lockup read as two different marks
+              between the themes. */}
+          <span aria-hidden="true">
+            <IslandMark size={28} />
           </span>
           <span className="strong">AI Agent Island</span>
           <span className="small muted">

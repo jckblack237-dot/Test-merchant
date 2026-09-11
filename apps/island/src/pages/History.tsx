@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom';
 import { describeError, listMissions, type MissionRecord, type MissionStatus } from '../lib/api';
 import {
   DECISION_LABEL,
-  DECISION_PILL,
   Empty,
   ErrorNote,
   Loading,
@@ -61,7 +60,9 @@ export function History() {
 
   return (
     <div className="stack">
-      <div className="row row--between row--wrap">
+      {/* Top-aligned, as on the mission page: centred against a two-line head the
+          action floated 14px below the title it belongs to. */}
+      <div className="row row--between row--wrap row--top">
         <div className="page-head">
           <h1 className="page-head__title">Missions</h1>
           <p className="page-head__sub">Every mission this account has sent to the island.</p>
@@ -119,14 +120,19 @@ export function History() {
                   </div>
                 </div>
 
+                {/* One treatment for the three of them, and one colour in the
+                    row. The verdict was painted in the accent — the colour of
+                    the thing you are invited to click — for a label nobody can
+                    act on, so it steps back to neutral and lets the mission's
+                    own state be the only thing tinted. */}
                 <div className="row row--wrap">
                   {mission.decision ? (
-                    <span className={`pill ${DECISION_PILL[mission.decision]}`}>
-                      {DECISION_LABEL[mission.decision]}
-                    </span>
+                    <span className="pill pill--muted">{DECISION_LABEL[mission.decision]}</span>
                   ) : null}
                   {mission.confidence === null ? null : (
-                    <span className="small tabular muted">{formatPercent(mission.confidence)}</span>
+                    <span className="pill pill--muted tabular" title="Overall confidence">
+                      {formatPercent(mission.confidence)}
+                    </span>
                   )}
                   <StatusPill status={mission.status} />
                 </div>

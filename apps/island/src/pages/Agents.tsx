@@ -61,6 +61,11 @@ export function Agents() {
     entries: roster.agents.filter((entry) => entry.definition.stage === stage),
   })).filter((group) => group.entries.length > 0);
 
+  /** Dependencies are stored as ids. The card two columns over is titled "Task
+   *  Manager"; printing `task_manager` beside it reads as an unfinished screen. */
+  const names = new Map(roster.agents.map((entry) => [entry.definition.id, entry.definition.name]));
+  const nameOf = (agentId: string) => names.get(agentId) ?? agentId.replace(/_/g, ' ');
+
   return (
     <div className="stack stack--lg">
       <div className="page-head">
@@ -71,12 +76,15 @@ export function Agents() {
           stage run together when their dependencies allow. Switching an agent off here switches it
           off for every future mission on this account.
         </p>
-        <span className="launch__hint">
+        {/* Set as the paragraph above it rather than as a caption: two
+            paragraphs stacked in one block at two unrelated measures read as two
+            unrelated things, and this one is a disclosure, not a footnote. */}
+        <p className="page-head__sub">
           Engine: {roster.engineLabel}
           {roster.simulation
             ? ' — no model credential is configured, so these agents return placeholders rather than research.'
             : '.'}
-        </span>
+        </p>
       </div>
 
       {error ? <ErrorNote message={error} /> : null}
@@ -125,7 +133,7 @@ export function Agents() {
                 <p className="agent-card__body">
                   {definition.dependsOn.length === 0
                     ? 'Starts first — it depends on nothing.'
-                    : `Waits for: ${definition.dependsOn.join(', ')}`}
+                    : `Waits for: ${definition.dependsOn.map(nameOf).join(', ')}`}
                 </p>
 
                 <div>

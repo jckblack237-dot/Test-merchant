@@ -141,8 +141,14 @@ export function MissionControl() {
 
       <form className="stack stack--lg" onSubmit={submit}>
         <div className="card card--sea launch">
+          {/* Run mode and Context each title themselves with a section heading,
+              while this card used its form label as a title — three peer cards,
+              two heading systems. The heading is now the card's title and the
+              field keeps the same words for a screen reader without printing
+              them twice. */}
+          <h2 className="report__heading">The question</h2>
           <label className="field">
-            <span className="field__label">The question</span>
+            <span className="sr-only">The question</span>
             <textarea
               className="textarea"
               rows={5}

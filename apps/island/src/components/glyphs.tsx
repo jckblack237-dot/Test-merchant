@@ -4,9 +4,14 @@
  *
  * These replace the emoji that used to stand in for each agent. Every mark is
  * geometric rather than pictorial, because the same path has to survive being
- * drawn at 16 CSS pixels in a roster card and at roughly four map units inside
+ * drawn at 18 CSS pixels in a roster card and at roughly four map units inside
  * a station — anything with more than about three strokes turns to mud at that
  * size. For the same reason no mark uses more than three subpaths.
+ *
+ * Every mark is also drawn to fill about sixteen of the twenty-four units it is
+ * given. A mark that only filled ten of them read as a smudge in the middle of
+ * an otherwise empty card avatar, which is what made the line-icon set look
+ * broken rather than quiet.
  */
 
 /** Full circles are two half-arcs rather than one 360° arc, because a single
@@ -34,31 +39,31 @@ export const AGENT_GLYPHS: Record<string, string> = {
   research: `${circle(10.4, 10.4, 6.2)}M15 15L20.2 20.2`,
 
   // Two overlapping circles: the competitive overlap, read as a Venn.
-  competitor: `${circle(9.2, 12, 5.6)}${circle(14.8, 12, 5.6)}`,
+  competitor: `${circle(9.4, 12, 5.9)}${circle(14.6, 12, 5.9)}`,
 
   // A speech bubble for the customer's own voice.
   customer_research:
     'M7.4 5H16.6A2.4 2.4 0 0 1 19 7.4V13.8A2.4 2.4 0 0 1 16.6 16.2H11' +
     'L7.6 19.4V16.2H7.4A2.4 2.4 0 0 1 5 13.8V7.4A2.4 2.4 0 0 1 7.4 5Z',
 
-  // A chip: die inside a package. Legs were tried and lost at 16px.
+  // A chip: die inside a package. Legs were tried and lost at avatar size.
   technology:
-    'M8.8 6.4H15.2A2.4 2.4 0 0 1 17.6 8.8V15.2A2.4 2.4 0 0 1 15.2 17.6H8.8' +
-    'A2.4 2.4 0 0 1 6.4 15.2V8.8A2.4 2.4 0 0 1 8.8 6.4Z' +
-    'M10.2 10.2H13.8V13.8H10.2Z',
+    'M8.2 5.6H15.8A2.6 2.6 0 0 1 18.4 8.2V15.8A2.6 2.6 0 0 1 15.8 18.4H8.2' +
+    'A2.6 2.6 0 0 1 5.6 15.8V8.2A2.6 2.6 0 0 1 8.2 5.6Z' +
+    'M9.8 9.8H14.2V14.2H9.8Z',
 
   // Balance scales: the beam and its two hanging arms are one stroke, then the
   // stem and the foot.
-  legal: 'M4.6 11.7L6.4 7.7H17.6L19.4 11.7M12 7.7V17.1M8.2 17.1H15.8',
+  legal: 'M4.4 11.0L6.4 6.2H17.6L19.6 11.0M12 6.2V18.6M7.8 18.6H16.2',
 
   // Three ascending bars.
-  market_analysis: 'M6.6 17.8V13.2M12 17.8V9.6M17.4 17.8V6.2',
+  market_analysis: 'M5.6 18.8V13.6M12 18.8V9.2M18.4 18.8V5.2',
 
   // A fork: one input decomposed into two branches.
-  analysis: 'M12 18V12.2L7 7.2M12 12.2L17 7.2',
+  analysis: 'M12 19V12L6.2 6.2M12 12L17.8 6.2',
 
   // A broadcast mark: the source dot and two widening arcs.
-  marketing: `${circle(7.9, 12, 1.5)}M12.1 7.8A6 6 0 0 1 12.1 16.2M14.7 5.2A9.6 9.6 0 0 1 14.7 18.8`,
+  marketing: `${circle(6.6, 12, 1.6)}M11.2 7.6A6.2 6.2 0 0 1 11.2 16.4M14.2 4.8A9.8 9.8 0 0 1 14.2 19.2`,
 
   // A shield with a check: the verification gate.
   risk_verification:
@@ -73,17 +78,24 @@ export const AGENT_GLYPHS: Record<string, string> = {
   operations: `${circle(12, 12, 6.8)}${circle(12, 12, 2.4)}`,
 
   // A banner on a pole — a position taken, not a cartoon flag.
-  strategy: 'M7.4 4.6V19.4M7.4 6H17.6L14.6 9.6L17.6 13.2H7.4',
+  strategy: 'M6.4 4.4V19.6M6.4 6H18.6L15.4 9.8L18.6 13.6H6.4',
 
   // A seal: the ring and the check that closes the mission.
   chief_ai: `${circle(12, 12, 7.4)}M8.4 12.2L11 14.8L15.8 9.2`,
 };
 
+/** 1.8 on the 24 grid lands at 1.35px once the mark is drawn at 18. The 1.6 the
+ *  spec asked for came out at 1.2px, and a 1.2px muted grey line inside a grey
+ *  squircle is what made the card avatars read as empty. The map overrides this
+ *  from the stylesheet, in map units, so only the card avatars move. */
+const STROKE_WIDTH = 1.8;
+
 export interface AgentGlyphProps {
   agent: string;
   /** Side of the square the glyph is drawn into. In a card this is CSS pixels;
    *  on the map it is map units, because a nested SVG measures in whatever its
-   *  parent's user space happens to be. */
+   *  parent's user space happens to be. The default is the 18px the card
+   *  avatar's 36px squircle is specced to hold. */
   size?: number;
   className?: string;
 }
@@ -96,8 +108,9 @@ export interface AgentGlyphProps {
  * recolour or re-weight the glyph: a presentation attribute on the path itself
  * would beat any rule set on an ancestor, and the mark would be stuck.
  */
-export function AgentGlyph({ agent, size = 16, className }: AgentGlyphProps): JSX.Element {
+export function AgentGlyph({ agent, size = 18, className }: AgentGlyphProps): JSX.Element {
   const d = AGENT_GLYPHS[agent] ?? FALLBACK_GLYPH;
+
   return (
     <svg
       className={className}
@@ -106,7 +119,7 @@ export function AgentGlyph({ agent, size = 16, className }: AgentGlyphProps): JS
       height={size}
       fill="none"
       stroke="currentColor"
-      strokeWidth={1.6}
+      strokeWidth={STROKE_WIDTH}
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"

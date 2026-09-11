@@ -26,9 +26,12 @@ import {
   type MissionEvent,
   type MissionEventType,
   type MissionPackage,
+  type RosterEntry,
+  type Severity,
 } from '../lib/api';
 import { canAct, useSession } from '../lib/session';
 import {
+  AGENT_STATE_LABEL,
   AgentStatePill,
   AlertMark,
   ConfidenceMeter,
@@ -46,6 +49,7 @@ import {
   formatDateTime,
   formatDuration,
   formatMoney,
+  formatPercent,
   formatTime,
 } from '../components/ui';
 import { AgentGlyph } from '../components/glyphs';
@@ -120,9 +124,43 @@ const CORE_OUTPUT_KEYS = new Set([
   'confidence',
 ]);
 
+/** Severity said in words. A pink pill beside an amber label chip and a green
+ *  state pill makes three colours argue over one claim; the word carries it. */
+const SEVERITY_LEAD: Record<Severity, string> = {
+  high: 'High severity',
+  medium: 'Medium severity',
+  low: 'Low severity',
+};
+
 function humanise(key: string): string {
   const words = key.replace(/_/g, ' ');
   return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/**
+ * Agent id → the name every other surface shows it under.
+ *
+ * `risk_verification` is a database key. It has no business appearing in a
+ * sentence fifty pixels below the same agent's card title, so every line that
+ * names an agent goes through here first.
+ */
+function agentNamer(roster: RosterEntry[]): (agentId: string) => string {
+  const names = new Map(roster.map((entry) => [entry.definition.id, entry.definition.name]));
+  return (agentId) => names.get(agentId) ?? humanise(agentId);
+}
+
+/** The status the report stored for an agent, said the way the page says it. */
+function stateLabel(status: string): string {
+  return AGENT_STATE_LABEL[status as AgentState] ?? humanise(status);
+}
+
+/** One warning: a sentence with at most one identifier in it. The identifier is
+ *  set apart as a reference so a key is never read as a word. */
+interface Warning {
+  id: string;
+  lead: string;
+  ref?: string;
+  tail?: string;
 }
 
 function textOf(value: unknown): string | null {
@@ -210,6 +248,10 @@ export function MissionDetail() {
     return entries.map((entry) => entry.definition);
   }, [pkg]);
 
+  /** Built from the whole roster rather than from the mission's own crew: an
+   *  agent can be named by a challenge or a correction after being switched off. */
+  const name = useMemo(() => agentNamer(pkg?.roster ?? []), [pkg]);
+
   /** The most recent run per agent: a retry and a correction round are separate rows. */
   const runs = useMemo(() => {
     const map = new Map<string, AgentRunRecord>();
@@ -263,25 +305,39 @@ export function MissionDetail() {
   }, [pkg, runs]);
 
   const warnings = useMemo(() => {
-    const out: string[] = [];
+    const out: Warning[] = [];
     for (const definition of agents) {
       const state = states[definition.id];
-      if (state === 'failed') out.push(`${definition.name} failed; the mission continued without it.`);
-      if (state === 'retrying') out.push(`${definition.name} is retrying after an unusable response.`);
-      if (state === 'needs_review') out.push(`${definition.name} produced work that needs a human read.`);
+      if (state === 'failed') {
+        out.push({ id: `failed-${definition.id}`, lead: `${definition.name} failed; the mission continued without it.` });
+      }
+      if (state === 'retrying') {
+        out.push({ id: `retrying-${definition.id}`, lead: `${definition.name} is retrying after an unusable response.` });
+      }
+      if (state === 'needs_review') {
+        out.push({ id: `review-${definition.id}`, lead: `${definition.name} produced work that needs a human read.` });
+      }
     }
     for (const record of verification.unresolved) {
       if (record.severity === 'high') {
-        out.push(`Unresolved high-severity flag on ${record.findingId}: ${record.reason}`);
+        out.push({
+          id: `flag-${record.id}`,
+          lead: 'Unresolved high-severity flag on ',
+          ref: record.findingId,
+          tail: `: ${record.reason}`,
+        });
       }
     }
     for (const correction of pkg?.corrections ?? []) {
       if (!correction.resolved) {
-        out.push(`Open challenge — ${correction.fromAgent} → ${correction.toAgent}: ${correction.reason}`);
+        out.push({
+          id: `challenge-${correction.id}`,
+          lead: `Open challenge — ${name(correction.fromAgent)} → ${name(correction.toAgent)}: ${correction.reason}`,
+        });
       }
     }
     return out;
-  }, [agents, states, verification, pkg]);
+  }, [agents, states, verification, pkg, name]);
 
   async function command(action: MissionCommand) {
     if (action === 'abort' && !confirm('Stop this mission? Work already done is kept.')) return;
@@ -332,11 +388,28 @@ export function MissionDetail() {
 
   const report = mission.finalReport;
   const firstWorking = working[0];
-  const currentAgent = !firstWorking
-    ? '—'
-    : working.length === 1
+  const remaining = agents.length - completedCount;
+  const finished = agents.length > 0 && remaining === 0;
+
+  // An agent name set at 28px wraps to two lines and leaves one card in a
+  // four-up row 22px taller than its neighbours, and an em dash for "nobody" is
+  // read as a failed render. A count always fits on one line, and a mission that
+  // has ended says so; the caption underneath names who is actually working.
+  const ended = !LIVE.has(mission.status);
+  const workingValue = firstWorking
+    ? `${working.length} agent${working.length === 1 ? '' : 's'}`
+    : ended
+      ? 'Finished'
+      : 'Idle';
+  const workingNote = firstWorking
+    ? working.length === 1
       ? firstWorking.name
-      : `${working.length} agents`;
+      : [...new Set(working.map((definition) => STAGE_LABEL[definition.stage]))].join(' · ')
+    : ended
+      ? mission.status === 'completed'
+        ? 'Every agent has reported'
+        : 'The mission ended early'
+      : 'No agent is running';
 
   return (
     <div className="stack stack--lg">
@@ -429,28 +502,27 @@ export function MissionDetail() {
       <StageRail agents={agents} states={states} currentStage={mission.currentStage} />
 
       <div className="grid grid--4">
-        <Stat
-          label="Working now"
-          value={currentAgent}
-          note={
-            working.length > 1
-              ? working.map((definition) => definition.name).join(', ')
-              : firstWorking
-                ? STAGE_LABEL[firstWorking.stage]
-                : mission.status === 'completed'
-                  ? 'Mission finished'
-                  : 'Nobody is working'
-          }
-        />
+        <Stat label="Working now" value={workingValue} note={workingNote} />
         <Stat
           label="Completed"
           value={`${completedCount}/${agents.length}`}
-          note={`${agents.length - completedCount} still to run`}
+          note={remaining === 0 ? 'Nothing left to run' : `${remaining} still to run`}
         />
         <Stat
           label="Progress"
           value={`${progress}%`}
-          note={mission.currentStage ? STAGE_LABEL[mission.currentStage] : 'Not started'}
+          // "100%" over "Not started" is the caption contradicting its own
+          // number: the stage clears when the mission ends, so it cannot be the
+          // only thing the caption knows about.
+          note={
+            finished
+              ? 'All stages done'
+              : mission.currentStage
+                ? STAGE_LABEL[mission.currentStage]
+                : progress > 0
+                  ? 'No stage running'
+                  : 'Not started'
+          }
         />
         <Stat
           label="Verification"
@@ -461,15 +533,19 @@ export function MissionDetail() {
       </div>
 
       <div className="card stack">
-        <div className="bar" aria-hidden="true">
-          <div className="bar__fill" style={{ width: `${progress}%` }} />
-        </div>
+        {/* The progress bar used to sit here: a full-bleed accent bar restating a
+            percentage printed 80px above, inside a card about warnings. The
+            number already reads, so it is dropped rather than moved. */}
         {warnings.length > 0 ? (
           <div className="stack stack--sm">
             <span className="eyebrow">Warnings ({warnings.length})</span>
             <ul className="bullets small">
-              {warnings.map((warning, index) => (
-                <li key={index}>{warning}</li>
+              {warnings.map((warning) => (
+                <li key={warning.id}>
+                  {warning.lead}
+                  {warning.ref ? <span className="mono">{warning.ref}</span> : null}
+                  {warning.tail}
+                </li>
               ))}
             </ul>
           </div>
@@ -484,7 +560,7 @@ export function MissionDetail() {
           <h2 className="report__heading">The island</h2>
           <span className="launch__hint">
             {activeTransfer
-              ? `Handing off: ${activeTransfer.from} → ${activeTransfer.to}`
+              ? `Handing off: ${name(activeTransfer.from)} → ${name(activeTransfer.to)}`
               : 'Select a station to open that agent’s work.'}
           </span>
         </div>
@@ -510,21 +586,22 @@ export function MissionDetail() {
             state={states[definition.id] ?? 'waiting'}
             open={open[definition.id] === true}
             highlighted={selected === definition.id}
+            name={name}
             onToggle={() => setOpen((current) => ({ ...current, [definition.id]: !current[definition.id] }))}
           />
         ))}
       </section>
 
       <div className="split split--even">
-        <Timeline events={events} agents={agents} />
-        <AuditTrail pkg={pkg} />
+        <Timeline events={events} name={name} />
+        <AuditTrail pkg={pkg} name={name} />
       </div>
 
-      <VerificationPanel pkg={pkg} passed={verification.passed} />
+      <VerificationPanel pkg={pkg} passed={verification.passed} name={name} />
 
       <SourceRegister pkg={pkg} />
 
-      {report ? <ReportView report={report} /> : null}
+      {report ? <ReportView report={report} name={name} /> : null}
 
       {mission.status === 'completed' ? (
         <section className="card stack">
@@ -544,17 +621,23 @@ export function MissionDetail() {
             </div>
           ))}
 
-          <form className="row" onSubmit={ask}>
+          {/* The field stood at 40px with a 31px pill beside it, so a paired
+              control and its own submit had two different heights. Stacked, they
+              share a left edge, and the button is the full-size primary action
+              of the card — the shape the launch card already uses. */}
+          <form className="stack stack--sm" onSubmit={ask}>
             <input
-              className="input grow"
+              className="input"
               value={question}
               onChange={(event) => setQuestion(event.target.value)}
               placeholder="What would change this recommendation?"
               aria-label="Ask a follow-up question about this mission"
             />
-            <button className="btn btn--sm" type="submit" disabled={asking || !question.trim()}>
-              {asking ? 'Asking…' : 'Ask'}
-            </button>
+            <div>
+              <button className="btn" type="submit" disabled={asking || !question.trim()}>
+                {asking ? 'Asking…' : 'Ask'}
+              </button>
+            </div>
           </form>
         </section>
       ) : null}
@@ -626,6 +709,7 @@ function AgentPanel({
   state,
   open,
   highlighted,
+  name,
   onToggle,
 }: {
   definition: AgentDefinition;
@@ -633,6 +717,7 @@ function AgentPanel({
   state: AgentState;
   open: boolean;
   highlighted: boolean;
+  name: (agentId: string) => string;
   onToggle: () => void;
 }) {
   const output = run?.output ?? null;
@@ -641,36 +726,43 @@ function AgentPanel({
 
   return (
     <article className={`agent-card ${highlighted ? 'is-selected' : ''}`}>
-      {/* The only inline style left in these pages: a button has to be stripped
-          back to a plain row before it can wear a card's head, and no rule in
-          the sheet says that yet. */}
-      <button
-        type="button"
-        className="agent-card__head"
-        onClick={onToggle}
-        aria-expanded={open}
-        style={{ background: 'none', border: 0, padding: 0, width: '100%', textAlign: 'left' }}
-      >
-        <span className="agent-card__emoji" aria-hidden="true">
-          <AgentGlyph agent={definition.id} size={18} />
-        </span>
-        <span className="grow">
-          <span className="agent-card__name">{definition.name}</span>
-          <span className="agent-card__role">
-            {definition.role} · {STAGE_LABEL[definition.stage]}
-            {run && run.attempt > 1 ? ` · attempt ${run.attempt}` : ''}
-            {run && run.round > 0 ? ` · correction round ${run.round}` : ''}
+      {/* The confidence meter shares the head's line rather than sitting under
+          it, so a collapsed card is exactly one row tall. The chevron then reads
+          against the middle of the card instead of hanging 36px above it, nine
+          times down a report. */}
+      <div className="row">
+        {/* The only inline style left in these pages: a button has to be stripped
+            back to a plain row before it can wear a card's head, and the head's
+            own rule starts its children at the top — which is where the chevron
+            was stranded. Neither is something the sheet says yet. */}
+        <button
+          type="button"
+          className="agent-card__head grow"
+          onClick={onToggle}
+          aria-expanded={open}
+          style={{ background: 'none', border: 0, padding: 0, textAlign: 'left', alignItems: 'center' }}
+        >
+          <span className="agent-card__emoji" aria-hidden="true">
+            <AgentGlyph agent={definition.id} size={18} />
           </span>
-        </span>
-        <AgentStatePill state={state} />
-        <Chevron open={open} />
-      </button>
+          <span className="grow">
+            <span className="agent-card__name">{definition.name}</span>
+            <span className="agent-card__role">
+              {definition.role} · {STAGE_LABEL[definition.stage]}
+              {run && run.attempt > 1 ? ` · attempt ${run.attempt}` : ''}
+              {run && run.round > 0 ? ` · correction round ${run.round}` : ''}
+            </span>
+          </span>
+          <AgentStatePill state={state} />
+          <Chevron open={open} />
+        </button>
 
-      {run?.confidence !== null && run?.confidence !== undefined ? (
-        <div className="agent-panel__confidence">
-          <ConfidenceMeter value={run.confidence} label="Agent confidence" />
-        </div>
-      ) : null}
+        {run?.confidence !== null && run?.confidence !== undefined ? (
+          <div className="agent-panel__confidence">
+            <ConfidenceMeter value={run.confidence} label="Agent confidence" />
+          </div>
+        ) : null}
+      </div>
 
       {open ? (
         <div className="stack">
@@ -692,11 +784,13 @@ function AgentPanel({
               <ul className="bullets small">
                 {output.issues.map((issue) => (
                   <li key={issue.issue_id}>
-                    <span className={`pill pill--${issue.severity === 'high' ? 'negative' : 'warning'}`}>
-                      {issue.severity}
-                    </span>{' '}
-                    <strong>{issue.target_agent || 'own caveat'}</strong>
-                    {issue.target_finding_id ? ` (${issue.target_finding_id})` : ''}: {issue.problem}
+                    {/* Severity leads in ink rather than in a pink pill: the card
+                        already carries a state chip and a label chip, and a third
+                        colour for the same claim makes all three mean less. */}
+                    <strong>{SEVERITY_LEAD[issue.severity]}</strong> —{' '}
+                    {issue.target_agent ? name(issue.target_agent) : 'its own caveat'}
+                    {issue.target_finding_id ? <span className="mono"> {issue.target_finding_id}</span> : null}
+                    : {issue.problem}
                     <div className="source-meta">Required: {issue.required_action}</div>
                   </li>
                 ))}
@@ -819,12 +913,15 @@ function FindingRow({ finding }: { finding: Finding }) {
       <div className="grow stack stack--sm">
         <div className="row row--between row--wrap">
           <LabelChip label={finding.label} />
+          {/* The agent's own confidence meter sits on the card head 130px above,
+              at the same value and the same width. One bar per card; the
+              finding's own number is told here in figures. */}
           <span className="source-meta">
-            {finding.category} · importance {finding.importance}
+            {finding.category} · importance {finding.importance} · confidence{' '}
+            <span className="tabular">{formatPercent(finding.confidence)}</span>
           </span>
         </div>
         <span className="small">{finding.claim}</span>
-        <ConfidenceMeter value={finding.confidence} />
         {finding.evidence.length > 0 ? (
           <ul className="bullets source-meta">
             {finding.evidence.map((evidence, index) => (
@@ -893,9 +990,13 @@ function Structured({ value }: { value: unknown }): ReactNode {
 
 // --- narration --------------------------------------------------------------
 
-function Timeline({ events, agents }: { events: MissionEvent[]; agents: AgentDefinition[] }) {
-  const names = new Map(agents.map((definition) => [definition.id, definition.name]));
-
+function Timeline({
+  events,
+  name,
+}: {
+  events: MissionEvent[];
+  name: (agentId: string) => string;
+}) {
   return (
     <section className="card stack">
       <div className="row row--between">
@@ -917,7 +1018,7 @@ function Timeline({ events, agents }: { events: MissionEvent[]; agents: AgentDef
                   <p className="timeline__text">{event.message}</p>
                   <span className="timeline__time">
                     {formatTime(event.createdAt)}
-                    {event.agentId ? ` · ${names.get(event.agentId) ?? event.agentId}` : ''}
+                    {event.agentId ? ` · ${name(event.agentId)}` : ''}
                   </span>
                 </span>
               </li>
@@ -929,7 +1030,7 @@ function Timeline({ events, agents }: { events: MissionEvent[]; agents: AgentDef
   );
 }
 
-function AuditTrail({ pkg }: { pkg: MissionPackage }) {
+function AuditTrail({ pkg, name }: { pkg: MissionPackage; name: (agentId: string) => string }) {
   const challenges = pkg.events.filter((event) => event.type === 'challenge');
 
   return (
@@ -950,7 +1051,7 @@ function AuditTrail({ pkg }: { pkg: MissionPackage }) {
           <div className="grow">
             <div className="row row--between row--wrap">
               <span className="small strong">
-                {correction.fromAgent} → {correction.toAgent}
+                {name(correction.fromAgent)} → {name(correction.toAgent)}
               </span>
               <span className="row">
                 <span className={`pill pill--${correction.severity === 'high' ? 'negative' : 'warning'}`}>
@@ -983,7 +1084,15 @@ function AuditTrail({ pkg }: { pkg: MissionPackage }) {
   );
 }
 
-function VerificationPanel({ pkg, passed }: { pkg: MissionPackage; passed: boolean | null }) {
+function VerificationPanel({
+  pkg,
+  passed,
+  name,
+}: {
+  pkg: MissionPackage;
+  passed: boolean | null;
+  name: (agentId: string) => string;
+}) {
   if (pkg.verifications.length === 0) {
     return (
       <section className="card stack">
@@ -1019,7 +1128,7 @@ function VerificationPanel({ pkg, passed }: { pkg: MissionPackage; passed: boole
             {pkg.verifications.map((record) => (
               <tr key={record.id}>
                 <td className="mono small">{record.findingId}</td>
-                <td className="small">{record.agentId}</td>
+                <td className="small">{name(record.agentId)}</td>
                 <td>
                   <span
                     className={`pill pill--${
@@ -1030,7 +1139,7 @@ function VerificationPanel({ pkg, passed }: { pkg: MissionPackage; passed: boole
                           : 'warning'
                     }`}
                   >
-                    {record.status.replace(/_/g, ' ')}
+                    {humanise(record.status)}
                   </span>
                 </td>
                 <td className="small">{record.reason}</td>
@@ -1084,7 +1193,13 @@ function SourceRegister({ pkg }: { pkg: MissionPackage }) {
 
 // --- the final report (§12) -------------------------------------------------
 
-function ReportView({ report }: { report: FinalReport }) {
+function ReportView({
+  report,
+  name,
+}: {
+  report: FinalReport;
+  name: (agentId: string) => string;
+}) {
   const currency = report.financial_summary.currency || 'USD';
   const decision = report.recommendation.decision;
 
@@ -1228,7 +1343,8 @@ function ReportView({ report }: { report: FinalReport }) {
                   <span className={`pill pill--${issue.severity === 'high' ? 'negative' : 'warning'}`}>
                     {issue.severity}
                   </span>{' '}
-                  {issue.agent} · {issue.finding_id}: {issue.problem}
+                  {name(issue.agent)} · <span className="mono">{issue.finding_id}</span>:{' '}
+                  {issue.problem}
                   <div className="source-meta">Required: {issue.required_action}</div>
                 </li>
               ))}
@@ -1246,7 +1362,7 @@ function ReportView({ report }: { report: FinalReport }) {
               <span className="source-ref">{correction.findingId}</span>
               <div className="grow">
                 <div className="small strong">
-                  {correction.fromAgent} → {correction.toAgent}
+                  {name(correction.fromAgent)} → {name(correction.toAgent)}
                 </div>
                 <div className="source-meta">Was: {correction.originalClaim}</div>
                 <div className="small">Now: {correction.correctedClaim}</div>
@@ -1283,7 +1399,11 @@ function ReportView({ report }: { report: FinalReport }) {
       </ReportSection>
 
       <ReportSection title="17. Who did what">
-        <div className="table-wrap">
+        {/* The table's cells are inset 18px by their own padding, so bare in a
+            padded card the whole table hung to the right of its title with
+            nothing to justify it. Given its own flush card it has a left edge on
+            the heading's line, which is the shape the verification table uses. */}
+        <div className="card card--flush table-wrap">
           <table className="table">
             <thead>
               <tr>
@@ -1295,8 +1415,11 @@ function ReportView({ report }: { report: FinalReport }) {
             <tbody>
               {report.agent_summary.map((entry) => (
                 <tr key={entry.agent}>
-                  <td className="small strong">{entry.name || entry.agent}</td>
-                  <td className="small">{entry.status}</td>
+                  {/* Regular weight: the header row already carries the
+                      structure, and a bold first column draws a black stripe
+                      down an otherwise quiet table. */}
+                  <td className="small">{entry.name || name(entry.agent)}</td>
+                  <td className="small">{stateLabel(entry.status)}</td>
                   <td className="small">{entry.key_contribution}</td>
                 </tr>
               ))}

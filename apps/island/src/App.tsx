@@ -56,8 +56,12 @@ export function App() {
     return (
       <div className="auth-page">
         <div className="stack stack--sm center">
-          <span className="app__mark app__mark--lg" aria-hidden="true">
-            <IslandMark size={22} />
+          {/* No tile behind the mark here. Its fill is --surface-2, which is the
+              auth page's own ground in light and a raised square in dark, so the
+              lockup read as two different marks depending on the theme. On the
+              page ground it is one mark in both. */}
+          <span aria-hidden="true">
+            <IslandMark size={28} />
           </span>
           <span className="muted small">Restoring your session…</span>
         </div>

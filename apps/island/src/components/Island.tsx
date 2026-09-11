@@ -1,4 +1,10 @@
-import { useId, useMemo, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import { AgentGlyph } from './glyphs';
 import { AGENT_STATE_LABEL, STAGE_LABEL, type AgentState, type Stage } from './ui';
 
@@ -25,12 +31,6 @@ export interface IslandProps {
 /** The one agent marked as a capital rather than as a station. */
 const HQ_AGENT_ID = 'chief_ai';
 
-/** The habitable strip of the viewBox. Registry coordinates are advisory — an
- *  agent placed at the very edge of the 0-100 by 0-70 space still has to stand
- *  on land with its label inside the frame, so every position is mapped into
- *  this box rather than used raw. */
-const SPAN = { x0: 11, x1: 88, y0: 12, y1: 57 };
-
 // The coastline: a closed spline through fourteen hand-placed headlands, which
 // is what stops the island reading as a circle with trees on it.
 const SHORE = [
@@ -44,7 +44,7 @@ const SHORE = [
 ].join(' ');
 
 // The first inland contour, hand-tuned to sit an even distance inside the
-// coast. The contours below it are this same line stepped down in size.
+// coast. It is the island's one line of relief.
 const GRASS = [
   'M11.6 37.6 C10.8 33.9 13.1 27.5 15.0 24.0 C16.8 20.6 20.7 17.0 23.9 15.2',
   'C27.1 13.4 32.1 12.1 35.8 12.1 C39.5 12.1 44.3 15.0 48.1 15.1',
@@ -60,21 +60,23 @@ const GRASS = [
  *  them by hand keeps them parallel to it and guarantees they never cross. */
 const ISLAND_CENTRE = { x: 50, y: 35.6 };
 
-/** Two bathymetry rings just offshore, and three relief contours inland. The
- *  stroke scales with the shape, so the inner lines come out fainter than the
- *  outer ones — which is the direction relief should fade anyway. */
-const DEPTH_SCALES = [1.07, 1.16];
-const CONTOUR_SCALES = [1, 0.8, 0.6];
+/** One bathymetry ring offshore and one relief contour inland — two lines, and
+ *  both close well inside the frame. Anything more stacked up as a set of
+ *  concentric wobbles that read as drawn water rather than as depth, and the
+ *  outermost of them used to run off the edge and terminate in mid-air. The
+ *  scale is small for the same reason: the ring has to stay a suggestion. */
+const DEPTH_SCALES = [1.045];
+const CONTOUR_SCALES = [1];
 
 /** Station geometry, in map units, and the tightest constraint on this map.
  *
- *  The registry lays agents out on a 6-column, 3-row grid, so once SPAN has
- *  mapped them the rows land 16.07 units apart. A station's state ring reaches
- *  4.45 units out (r 4.2 plus half of its 0.5 stroke), which leaves 7.17 units
- *  of clear air between one row's ring and the next row's. The phone bump takes
- *  the labels to 2.9px with a 0.85px halo stroke, and two lines of that at 1.05
- *  leading need 6.6 of those 7.17 units. Every number below is what is left
- *  after that sum, so raising any of them means re-doing it. */
+ *  A station's state ring reaches 4.45 units out (r 3.6 plus half of its 0.5
+ *  stroke), and under it the second line of its label runs to about 11.2 units
+ *  below the centre at phone type, so one station owns a band roughly 15.7 deep
+ *  and its own width of label wide. Both frames below are spaced so that no
+ *  label meets another label or the ring of the station beneath it — the
+ *  tightest clearance in either is about 0.9 units. Raising any number here
+ *  eats into that, so it means re-doing the sum in both frames. */
 const STATION_R = 3.6;
 const HQ_R = 4.8;
 const RING_GAP = 0.6;
@@ -82,6 +84,11 @@ const HALO_GAP = 1.1;
 const FOCUS_GAP = 1.3;
 const LABEL_DROP = 3.7;
 const LABEL_LEADING = '1.05em';
+
+/** Fallback only: the stylesheet owns the rendered badge radius so it can step
+ *  with the label type. One value for every station, capital included — the
+ *  capital's badge reports the same state, so it is the same mark. */
+const BADGE_R = 0.95;
 
 /** A badge as well as a colour, so the states stay apart for anyone who cannot
  *  tell amber from green. */
@@ -123,31 +130,170 @@ function round(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-/** Scale a shape about the middle of the island without moving it. */
-function concentric(scale: number): string {
-  return (
-    `translate(${n(ISLAND_CENTRE.x)} ${n(ISLAND_CENTRE.y)}) scale(${scale}) ` +
-    `translate(${n(-ISLAND_CENTRE.x)} ${n(-ISLAND_CENTRE.y)})`
-  );
-}
-
 interface Point {
   x: number;
   y: number;
 }
 
+/** Scale a shape about the middle of the island without moving it. */
+function concentric(centre: Point, scale: number): string {
+  return (
+    `translate(${n(centre.x)} ${n(centre.y)}) scale(${scale}) ` +
+    `translate(${n(-centre.x)} ${n(-centre.y)})`
+  );
+}
+
+/** Rewrites every coordinate in a path through `move`. Both shapes above are
+ *  made of nothing but absolute M, C and Z, so every number in them is half of
+ *  a point and the rewrite is a walk over pairs. */
+function mapPath(d: string, move: (point: Point) => Point): string {
+  const parts: string[] = [];
+  let pending: number | null = null;
+  for (const token of d.match(/[MCZ]|-?\d*\.?\d+/g) ?? []) {
+    if (/[MCZ]/.test(token)) {
+      parts.push(token);
+      continue;
+    }
+    const value = Number(token);
+    if (pending === null) {
+      pending = value;
+      continue;
+    }
+    const moved = move({ x: pending, y: value });
+    parts.push(`${n(moved.x)} ${n(moved.y)}`);
+    pending = null;
+  }
+  return parts.join(' ');
+}
+
+/* --- The two frames the map is drawn in ----------------------------------- */
+
+/** The habitable strip of the wide viewBox. Registry coordinates are advisory —
+ *  an agent placed at the very edge of the 0-100 by 0-70 space still has to
+ *  stand on land with its label inside the frame, so every position is mapped
+ *  into this box rather than used raw. */
+const WIDE_SPAN = { x0: 11, x1: 88, y0: 12, y1: 57 };
+
+function placeWide(agent: IslandAgent, hq: boolean): Point {
+  const x = WIDE_SPAN.x0 + (clamp(agent.map.x, 0, 100) / 100) * (WIDE_SPAN.x1 - WIDE_SPAN.x0);
+  const y = WIDE_SPAN.y0 + (clamp(agent.map.y, 0, 70) / 70) * (WIDE_SPAN.y1 - WIDE_SPAN.y0);
+  // The capital is drawn a third larger than a station, so it needs more room
+  // on every side before its ring runs off the frame.
+  return hq ? { x: clamp(x, 16, 84), y: clamp(y, 17, 52) } : { x, y };
+}
+
+/**
+ * The phone frame.
+ *
+ * A phone gives the map about 360px of width, and the wide frame spends that on
+ * six columns of stations: every label lands at six unreadable pixels, the
+ * gathering agents' names run into each other and the capital is pressed
+ * against the eastern edge. The fix is not smaller type — it is fewer columns.
+ *
+ * So the whole map turns a quarter clockwise. The registry's six west-to-east
+ * columns become six rows and its three north-to-south rows become three
+ * columns, which is the same graph with the same trails, read down the screen
+ * the way a phone is held rather than across it. Three columns 17.9 units apart
+ * and six rows 15.7 apart is what that costs: at 390px the labels come out at
+ * 13px, and the tightest pair of them on the map still clears by 3 units.
+ *
+ * The turn is baked into the coordinates rather than applied as an SVG
+ * transform because a transform would rotate the land's drop shadow with it and
+ * light the island from the side.
+ */
+const COMPACT_FRAME_SIZE = { width: 76, height: 104 };
+const COMPACT_CENTRE = { x: 38, y: 50.5 };
+const COMPACT_SCALE = 1.12;
+
+function toCompact(point: Point): Point {
+  return {
+    x: COMPACT_CENTRE.x - COMPACT_SCALE * (point.y - ISLAND_CENTRE.y),
+    y: COMPACT_CENTRE.y + COMPACT_SCALE * (point.x - ISLAND_CENTRE.x),
+  };
+}
+
+/** The same advisory box as WIDE_SPAN, with the axes swapped by the turn: the
+ *  registry's y runs east across the phone (north to the right, so the mission
+ *  still rounds the island the same way) and its x runs down.
+ *
+ *  It is inset a good deal further than a turned WIDE_SPAN would be, because
+ *  the turn scales the land about the frame's centre while the span is measured
+ *  off the frame's edges. Spread out to those edges the four stations nearest
+ *  the coast — task_manager, customer_research, legal and technology — stood
+ *  with their state rings hanging out over the water. Every station now clears
+ *  the coastline by at least 0.9 units, which is more margin than the wide
+ *  frame gives its own tightest station. */
+const COMPACT_SPAN = { x0: 12.5, x1: 62.5, y0: 5, y1: 97 };
+
+function placeCompact(agent: IslandAgent, hq: boolean): Point {
+  const x =
+    COMPACT_SPAN.x1 - (clamp(agent.map.y, 0, 70) / 70) * (COMPACT_SPAN.x1 - COMPACT_SPAN.x0);
+  const y =
+    COMPACT_SPAN.y0 + (clamp(agent.map.x, 0, 100) / 100) * (COMPACT_SPAN.y1 - COMPACT_SPAN.y0);
+  // The backstop for a registry coordinate this span was not drawn around: hold
+  // every station inside the band where two lines of its label still fit above
+  // the frame's bottom edge. The capital's ceiling is lower because its label
+  // hangs off a larger circle and so starts further down.
+  if (hq) return { x: clamp(x, 10, 66), y: clamp(y, 6, 91.5) };
+  return { x: clamp(x, 10, 66), y: clamp(y, 6, 92.7) };
+}
+
+interface MapFrame {
+  width: number;
+  height: number;
+  centre: Point;
+  shore: string;
+  grass: string;
+  place: (agent: IslandAgent, hq: boolean) => Point;
+}
+
+const WIDE_FRAME: MapFrame = {
+  width: 100,
+  height: 70,
+  centre: ISLAND_CENTRE,
+  shore: SHORE,
+  grass: GRASS,
+  place: placeWide,
+};
+
+const COMPACT_FRAME: MapFrame = {
+  width: COMPACT_FRAME_SIZE.width,
+  height: COMPACT_FRAME_SIZE.height,
+  centre: COMPACT_CENTRE,
+  shore: mapPath(SHORE, toCompact),
+  grass: mapPath(GRASS, toCompact),
+  place: placeCompact,
+};
+
+/** The same width the stylesheet steps the map's label type up at. A viewBox
+ *  cannot be swapped from a media query, so the frame has to be chosen here —
+ *  but the two have to change together, because the taller type is exactly what
+ *  the wide frame has no room for. */
+const COMPACT_QUERY = '(max-width: 560px)';
+
+function useCompactFrame(): boolean {
+  const [compact, setCompact] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia(COMPACT_QUERY).matches,
+  );
+
+  useEffect(() => {
+    const query = window.matchMedia(COMPACT_QUERY);
+    const sync = () => setCompact(query.matches);
+    // A resize between first render and this effect would otherwise be missed.
+    sync();
+    query.addEventListener('change', sync);
+    return () => query.removeEventListener('change', sync);
+  }, []);
+
+  return compact;
+}
+
+/* --- Drawing -------------------------------------------------------------- */
+
 interface Node {
   agent: IslandAgent;
   point: Point;
   hq: boolean;
-}
-
-function place(agent: IslandAgent, hq: boolean): Point {
-  const x = SPAN.x0 + (clamp(agent.map.x, 0, 100) / 100) * (SPAN.x1 - SPAN.x0);
-  const y = SPAN.y0 + (clamp(agent.map.y, 0, 70) / 70) * (SPAN.y1 - SPAN.y0);
-  // The capital is drawn a third larger than a station, so it needs more room
-  // on every side before its ring runs off the frame.
-  return hq ? { x: clamp(x, 16, 84), y: clamp(y, 17, 52) } : { x, y };
 }
 
 function trailPath(from: Point, to: Point): string {
@@ -191,11 +337,12 @@ export function Island({ agents, states, activeTransfer, onSelect, selected }: I
   // otherwise share — and fight over — the same paint.
   const uid = useId().replace(/:/g, '');
   const select = onSelect;
+  const frame = useCompactFrame() ? COMPACT_FRAME : WIDE_FRAME;
 
   const layout = useMemo(() => {
     const nodes: Node[] = agents.map((agent) => {
       const hq = agent.id === HQ_AGENT_ID;
-      return { agent, point: place(agent, hq), hq };
+      return { agent, point: frame.place(agent, hq), hq };
     });
     const points = new Map<string, Point>(nodes.map((node) => [node.agent.id, node.point]));
     const trails: { key: string; d: string }[] = [];
@@ -208,7 +355,7 @@ export function Island({ agents, states, activeTransfer, onSelect, selected }: I
       }
     }
     return { nodes, points, trails };
-  }, [agents]);
+  }, [agents, frame]);
 
   const transfer = useMemo(() => {
     if (!activeTransfer) return null;
@@ -253,12 +400,10 @@ export function Island({ agents, states, activeTransfer, onSelect, selected }: I
     // The glyph fills 55% of the disc, and the badge straddles the ring on the
     // upper-right diagonal, which is the one quarter no label ever reaches.
     const glyph = round(r * 1.1);
-    const badgeR = hq ? 1.5 : 1.4;
     const badgeAt = round(r * 0.72);
     const label = `${agent.name}, ${STAGE_LABEL[agent.stage]} stage, ${AGENT_STATE_LABEL[state].toLowerCase()}`;
 
     const classes = ['island-hut', `island-hut--${state}`];
-    if (hq) classes.push('island-hut--hq');
     if (selected === agent.id) classes.push('is-selected');
     if (select) classes.push('is-interactive');
 
@@ -286,27 +431,34 @@ export function Island({ agents, states, activeTransfer, onSelect, selected }: I
         }
       >
         <title>{`${agent.name} — ${AGENT_STATE_LABEL[state]}. ${agent.summary}`}</title>
-        <circle className="island-hut__focus" r={round(r + FOCUS_GAP)} />
-        <circle className="island-hut__halo" r={round(r + HALO_GAP)} />
-        <circle className="island-hut__pulse" r={round(r + RING_GAP)} />
-        <circle className="island-hut__disc" r={r} />
-        {/* The ring paints after the disc because the ring is the state, and
-            state has to be the thing that survives being overlapped. */}
-        <circle className="island-hut__ring" r={round(r + RING_GAP)} />
 
-        {hq ? (
-          // A capital is marked with a ring and a filled centre, not with a
-          // picture of a building.
-          <circle className="island-hut__core" r={1.5} />
-        ) : (
-          <g transform={`translate(${n(-glyph / 2)} ${n(-glyph / 2)})`}>
-            <AgentGlyph agent={agent.id} size={glyph} className="island-hut__glyph" />
-          </g>
-        )}
+        {/* `island-hut--hq` marks the capital in ink, and it is scoped to the
+            rings alone: on the whole station it would repaint the state badge
+            in ink too, and one finished mission would then show green ticks on
+            eight stations and a black one on the ninth. */}
+        <g className={hq ? 'island-hut--hq' : undefined}>
+          <circle className="island-hut__focus" r={round(r + FOCUS_GAP)} />
+          <circle className="island-hut__halo" r={round(r + HALO_GAP)} />
+          <circle className="island-hut__pulse" r={round(r + RING_GAP)} />
+          <circle className="island-hut__disc" r={r} />
+          {/* The ring paints after the disc because the ring is the state, and
+              state has to be the thing that survives being overlapped. */}
+          <circle className="island-hut__ring" r={round(r + RING_GAP)} />
+
+          {hq ? (
+            // A capital is marked with a ring and a filled centre, not with a
+            // picture of a building.
+            <circle className="island-hut__core" r={1.5} />
+          ) : (
+            <g transform={`translate(${n(-glyph / 2)} ${n(-glyph / 2)})`}>
+              <AgentGlyph agent={agent.id} size={glyph} className="island-hut__glyph" />
+            </g>
+          )}
+        </g>
 
         {badge ? (
           <g aria-hidden="true">
-            <circle className="island-hut__badge-disc" cx={n(badgeAt)} cy={n(-badgeAt)} r={badgeR} />
+            <circle className="island-hut__badge-disc" cx={n(badgeAt)} cy={n(-badgeAt)} r={BADGE_R} />
             <text className="island-hut__badge-mark" x={n(badgeAt)} y={n(-badgeAt)}>
               {badge}
             </text>
@@ -341,7 +493,7 @@ export function Island({ agents, states, activeTransfer, onSelect, selected }: I
     <div className="island-map">
       <svg
         className="island-map__svg"
-        viewBox="0 0 100 70"
+        viewBox={`0 0 ${frame.width} ${frame.height}`}
         preserveAspectRatio="xMidYMid meet"
         role="img"
         aria-label={mapLabel}
@@ -375,24 +527,47 @@ export function Island({ agents, states, activeTransfer, onSelect, selected }: I
           </filter>
         </defs>
 
-        <rect className="island-map__sea" x="0" y="0" width="100" height="70" fill={`url(#${uid}-sea)`} />
+        <rect
+          className="island-map__sea"
+          x="0"
+          y="0"
+          width={frame.width}
+          height={frame.height}
+          fill={`url(#${uid}-sea)`}
+        />
 
-        {/* Bathymetry: the coastline stepped outwards twice. Two hairlines are
-            the whole suggestion of water — there is no drawing of a sea here. */}
+        {/* Bathymetry: the coastline stepped outwards once, and only far enough
+            that the ring still closes inside the frame. One hairline is the
+            whole suggestion of water — there is no drawing of a sea here. */}
         <g className="island-map__waves" aria-hidden="true">
           {DEPTH_SCALES.map((scale) => (
-            <path key={scale} className="island-map__wave" d={SHORE} transform={concentric(scale)} />
+            <path
+              key={scale}
+              className="island-map__wave"
+              d={frame.shore}
+              transform={concentric(frame.centre, scale)}
+            />
           ))}
         </g>
 
         {/* The shore path exists only to cast the shadow: the land is drawn on
             top of it with the same outline, so its own fill never shows. */}
-        <path className="island-map__shore" d={SHORE} fill={`url(#${uid}-shore)`} filter={`url(#${uid}-lift)`} />
-        <path className="island-map__land" d={SHORE} fill={`url(#${uid}-land)`} />
+        <path
+          className="island-map__shore"
+          d={frame.shore}
+          fill={`url(#${uid}-shore)`}
+          filter={`url(#${uid}-lift)`}
+        />
+        <path className="island-map__land" d={frame.shore} fill={`url(#${uid}-land)`} />
 
         <g className="island-map__contours" aria-hidden="true">
           {CONTOUR_SCALES.map((scale) => (
-            <path key={scale} className="island-map__contour" d={GRASS} transform={concentric(scale)} />
+            <path
+              key={scale}
+              className="island-map__contour"
+              d={frame.grass}
+              transform={concentric(frame.centre, scale)}
+            />
           ))}
         </g>
 
