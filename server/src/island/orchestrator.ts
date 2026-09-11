@@ -236,6 +236,12 @@ interface MissionContext {
   selected: string[];
 }
 
+/** An agent's id is a database key. Event messages are read by people, so every
+ *  one that names an agent says the name the rest of the product shows. */
+function agentName(agentId: string): string {
+  return getAgent(agentId)?.name ?? agentId;
+}
+
 function emit(
   ctx: MissionContext,
   type: MissionEventType,
@@ -510,9 +516,9 @@ function clampRestatedConfidence(ctx: MissionContext, agentId: string, output: A
     emit(
       ctx,
       'log',
-      `${agentId} restated ${originId ?? finding.finding_id} at confidence ${raised} without attaching ` +
-        `new evidence. ${origin.agentId} first made that claim at ${origin.confidence}, so it has been ` +
-        `clamped back to ${origin.confidence}.`,
+      `${agentName(agentId)} restated ${originId ?? finding.finding_id} at confidence ${raised} without attaching ` +
+        `new evidence. ${agentName(origin.agentId)} first made that claim at ${origin.confidence}, so it ` +
+        `has been clamped back to ${origin.confidence}.`,
       { finding_id: originId ?? finding.finding_id, origin_agent: origin.agentId, from: raised, to: origin.confidence },
       agentId,
     );
@@ -578,7 +584,8 @@ function recordChallenges(ctx: MissionContext, agentId: string, output: AgentOut
     emit(
       ctx,
       'challenge',
-      `${agentId} challenged ${target}${issue.target_finding_id ? ` over ${issue.target_finding_id}` : ''}: ${issue.problem}`,
+      `${agentName(agentId)} challenged ${agentName(target)}` +
+        `${issue.target_finding_id ? ` over ${issue.target_finding_id}` : ''}: ${issue.problem}`,
       { target_agent: target, finding_id: issue.target_finding_id, severity: issue.severity, issue_id: issue.issue_id },
       agentId,
     );
@@ -607,7 +614,8 @@ function recordChallenges(ctx: MissionContext, agentId: string, output: AgentOut
     emit(
       ctx,
       'challenge',
-      `${agentId} corrected ${findingId || 'an earlier claim'}${origin ? ` from ${origin.agentId}` : ''}: ${challenge}`,
+      `${agentName(agentId)} corrected ${findingId || 'an earlier claim'}` +
+        `${origin ? ` from ${agentName(origin.agentId)}` : ''}: ${challenge}`,
       { finding_id: findingId, target_agent: origin?.agentId ?? '', severity: asSeverity(entry.severity) },
       agentId,
     );
