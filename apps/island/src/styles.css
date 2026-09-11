@@ -147,7 +147,7 @@ h3, h4 { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
 
 /* --- Primitives ---------------------------------------------------------- */
 
-.stack { display: flex; flex-direction: column; gap: 14px; }
+.stack { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 .stack--sm { gap: 8px; }
 .stack--lg { gap: 26px; }
 .row { display: flex; align-items: center; gap: 10px; }
@@ -491,7 +491,17 @@ a:focus-visible {
   padding: 2px;
   border-radius: var(--radius);
   background: var(--surface-2);
+  /* Six filters do not fit a phone. Scrolling the track inside itself keeps
+     every one of them reachable; without this the segments simply ran off the
+     side and took the whole page's horizontal scroll with them. */
+  overflow-x: auto;
+  scrollbar-width: none;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
 }
+
+.tabs::-webkit-scrollbar { display: none; }
+.tab { scroll-snap-align: start; }
 
 .tab {
   padding: 6px 15px;
@@ -641,7 +651,10 @@ a:focus-visible {
 
 /* --- Tables -------------------------------------------------------------- */
 
-.table-wrap { overflow-x: auto; }
+/* overflow-x alone is not enough: as a flex child this box still sizes itself
+   to the table's content unless it is allowed to shrink, and the page scrolls
+   sideways instead of the table scrolling inside it. */
+.table-wrap { overflow-x: auto; min-width: 0; }
 .table { width: 100%; border-collapse: collapse; font-size: 14px; }
 
 .table th {
@@ -763,6 +776,18 @@ a:focus-visible {
    which is worse than no effect at all. */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .app__nav { background: var(--surface); }
+}
+
+/* 88% works on a light desktop bar, where the page beneath is already pale. It
+   does not work over dark surfaces or at phone width, where the bar is tall and
+   the content passing under it stays legible through the glass. Frosted is an
+   effect; readable-through is a defect. */
+@media (prefers-color-scheme: dark) {
+  .app__nav { background: color-mix(in srgb, var(--surface) 95%, transparent); }
+}
+
+@media (max-width: 720px) {
+  .app__nav { background: color-mix(in srgb, var(--surface) 96%, transparent); }
 }
 
 .app__brand {
@@ -1210,7 +1235,11 @@ text.island-hut__emoji { display: none; }
 
 /* --- Agent cards --------------------------------------------------------- */
 
-.agent-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(268px, 1fr)); }
+/* auto-fill, not auto-fit: auto-fit collapses the empty tracks, so a stage with
+   one agent in it stretches that card across the full measure while a stage with
+   four shows them at a quarter of it — the same object rendered at two wildly
+   different sizes on one page. auto-fill keeps the column. */
+.agent-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); }
 
 .agent-card {
   display: flex;
@@ -1252,7 +1281,19 @@ label.agent-card { cursor: pointer; }
 .agent-card--off .pill { background: var(--surface-2); color: var(--text-faint); }
 
 .agent-card.is-selected { border-color: var(--accent); box-shadow: var(--shadow-sm), 0 0 0 3px var(--accent-soft); }
-.agent-card__head { display: flex; align-items: flex-start; gap: 12px; }
+/* Agent names run from one line ("Marketing Agent") to three ("Legal &
+   Compliance Agent"). Left to size themselves, the four descriptions in a row
+   start at three different heights. Reserving two lines puts them on one
+   baseline; the glyph centres on the first title line rather than floating at
+   the top of a header box that may be three lines deep. */
+.agent-card__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-height: 46px;
+}
+
+.agent-card__head > .agent-card__emoji { margin-top: -1px; }
 
 /* The toggle is a sibling of the title, not an overlay on it: given no width of
    its own it collapses and a wrapped agent name runs underneath it. */
@@ -1303,10 +1344,8 @@ label.agent-card { cursor: pointer; }
 .source-ref {
   flex: none;
   min-width: 44px;
-  padding: 2px 7px;
-  border-radius: var(--radius-sm);
-  background: var(--surface-3);
-  color: var(--text-muted);
+  padding: 2px 0;
+  color: var(--text-faint);
   font-family: var(--mono);
   font-size: 11.5px;
   font-weight: 500;
@@ -1334,7 +1373,13 @@ label.agent-card { cursor: pointer; }
   gap: 12px;
   padding: 8px 12px;
   border-left: 1px solid var(--hairline);
+  /* A flex item defaults to min-width:auto, which refuses to shrink below its
+     content. One long event message then makes the row wider than the card and
+     scrolls the entire page sideways. */
+  min-width: 0;
 }
+
+.timeline__item > * { min-width: 0; }
 
 .timeline__marker { flex: none; width: 16px; display: flex; justify-content: center; padding-top: 6px; }
 .timeline__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--surface-3); }
@@ -1394,7 +1439,14 @@ label.agent-card { cursor: pointer; }
   .app__links { order: 1; width: 100%; }
   .app__spacer { display: none; }
   .app__main { padding: 20px 16px 60px; }
-  .app__user { display: none; }
+  /* Truncated rather than dropped: on a multi-tenant product, which account you
+     are looking at is not a detail to lose at phone width. */
+  .app__user {
+    order: 2;
+    width: 100%;
+    font-size: 12px;
+    color: var(--text-faint);
+  }
   .card { padding: 18px; }
 
   /* A finger is about 44px across whatever the control looks like. Buttons at

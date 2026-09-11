@@ -342,9 +342,14 @@ export function LabelChip({ label, text }: { label: Label; text?: string }) {
   );
 }
 
+/**
+ * Pass `label={null}` where the meter sits in a list and every row would
+ * otherwise repeat the same overline above its own number. The percentage still
+ * labels itself, and the accessible name is kept either way.
+ */
 export function ConfidenceMeter({
   value, label = 'Confidence', note,
-}: { value: number; label?: string; note?: string }) {
+}: { value: number; label?: string | null; note?: string }) {
   const safe = Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
   const percent = Math.round(safe * 100);
   const band = safe >= 0.7 ? 'strong' : safe >= 0.45 ? 'medium' : 'weak';
@@ -352,13 +357,13 @@ export function ConfidenceMeter({
   return (
     <div className={`meter meter--${band}`}>
       <div className="meter__head">
-        <span className="meter__label">{label}</span>
+        {label ? <span className="meter__label">{label}</span> : <span />}
         <span className="meter__value tabular">{percent}%</span>
       </div>
       <div
         className="meter__track"
         role="meter"
-        aria-label={label}
+        aria-label={label ?? 'Confidence'}
         aria-valuenow={percent}
         aria-valuemin={0}
         aria-valuemax={100}

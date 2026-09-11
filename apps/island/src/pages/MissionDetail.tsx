@@ -1245,7 +1245,7 @@ function ReportView({
                   </span>
                 </div>
                 <span className="small">{finding.finding}</span>
-                <ConfidenceMeter value={finding.confidence} />
+                <ConfidenceMeter value={finding.confidence} label={null} />
               </div>
             </div>
           ))

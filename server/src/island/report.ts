@@ -220,7 +220,9 @@ function keyFindingsFrom(chief: AgentOutput | undefined, outputs: Map<string, Ag
     }
   }
   return collected.slice(0, 12).map(({ agent, finding }) => ({
-    finding: `${finding.claim} (${agent})`,
+    // Attributed by the name the agent is known by everywhere else. `agent` is a
+    // database key and has no business closing a sentence a person reads.
+    finding: `${finding.claim} (${getAgent(agent)?.name ?? agent})`,
     evidence: finding.evidence.map((item) => item.source_id).filter(Boolean),
     label: finding.label,
     confidence: finding.confidence,
