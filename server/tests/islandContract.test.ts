@@ -191,3 +191,74 @@ describe('island roster', () => {
     }
   });
 });
+
+describe('the forex desk', () => {
+  const FOREX = ['market_context', 'technical_analysis', 'trade_thesis'];
+
+  it('stays off unless a mission asks for it', () => {
+    for (const id of FOREX) {
+      const agent = getAgent(id);
+      expect(agent, id).toBeDefined();
+      expect(agent!.core, `${id} is a specialist, not a core agent`).toBe(false);
+      expect(agent!.enabledByDefault, `${id} must not run on an unrelated mission`).toBe(false);
+    }
+  });
+
+  it('runs context before structure, and structure before a view', () => {
+    const waves = planWaves([...CORE_AGENT_IDS, ...FOREX]);
+    const at = (id: string) => waves.findIndex((wave) => wave.includes(id));
+    expect(at('market_context')).toBeLessThan(at('technical_analysis'));
+    expect(at('technical_analysis')).toBeLessThan(at('trade_thesis'));
+    // A thesis that has not been through the verification gate is just an opinion.
+    expect(at('risk_verification')).toBeLessThan(at('trade_thesis'));
+  });
+
+  it('lets every agent say it had no data, rather than forcing a number', () => {
+    const context = SCHEMAS_BY_AGENT.market_context!.properties!;
+    expect(context.data_available!.type).toBe('boolean');
+    // An empty calendar is a valid answer: minItems would force an invention.
+    expect(context.scheduled_events!.minItems ?? 0).toBe(0);
+
+    const technical = SCHEMAS_BY_AGENT.technical_analysis!.properties!;
+    expect(technical.price_basis!.properties!.live!.type).toBe('boolean');
+    expect(technical.levels!.minItems ?? 0).toBe(0);
+  });
+
+  it('makes the thesis carry its own invalidation and its own disclaimer', () => {
+    const thesis = SCHEMAS_BY_AGENT.trade_thesis!.properties!;
+    // A direction without the thing that would disprove it is not analysis.
+    expect(Object.keys(thesis.invalidation!.properties!)).toEqual(
+      expect.arrayContaining(['what_would_break_it', 'level', 'reasoning']),
+    );
+    expect(thesis.not_advice).toBeDefined();
+    // Standing aside has to be sayable, or the agent will always find a direction.
+    expect(thesis.thesis!.properties!.direction!.enum).toContain('stand_aside');
+  });
+
+  it('never offers a field for an entry, a stop or a position size', () => {
+    const banned = /entry|take_profit|takeprofit|stop_loss|stoploss|position_size|lot|leverage/i;
+    const walkKeys = (schema: JsonSchema, path: string, found: string[]): void => {
+      for (const [key, child] of Object.entries(schema.properties ?? {})) {
+        if (banned.test(key)) found.push(`${path}.${key}`);
+        walkKeys(child, `${path}.${key}`, found);
+      }
+      if (schema.items) walkKeys(schema.items, `${path}[]`, found);
+    };
+    for (const id of FOREX) {
+      const found: string[] = [];
+      walkKeys(SCHEMAS_BY_AGENT[id]!, id, found);
+      // The schema is what the model fills in. Give it a box labelled "entry"
+      // and it will put a number in it, whether or not it has prices.
+      expect(found, `${id} must not invite an executable order`).toEqual([]);
+    }
+  });
+
+  it('tells all three agents, in the prompt, not to invent a price', () => {
+    for (const id of FOREX) {
+      const prompt = getAgent(id)!.systemPrompt.toLowerCase();
+      expect(prompt, id).toMatch(/never fabricate|may not invent|not invent a price|invent a url/);
+    }
+    expect(getAgent('technical_analysis')!.systemPrompt).toMatch(/may not invent a price/i);
+    expect(getAgent('trade_thesis')!.systemPrompt).toMatch(/thesis, not a signal/i);
+  });
+});

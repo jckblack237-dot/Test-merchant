@@ -464,6 +464,112 @@ export const CHIEF_AI_SCHEMA = agentSchema('chief_ai', {
   ),
 });
 
+// --- Forex desk -------------------------------------------------------------
+//
+// These three exist because a currency question is not a market-research
+// question: it turns on scheduled events, rate differentials and levels, and it
+// is acted on with money in minutes rather than quarters. That raises the cost
+// of a confident wrong answer, so their schemas force the reasoning and the
+// invalidation into the open rather than letting a direction stand alone.
+
+export const MARKET_CONTEXT_SCHEMA = agentSchema('market_context', {
+  pair: str('The currency pair this concerns, e.g. "EUR/USD". "" if the task names none.'),
+  regime: obj({
+    description: str('What kind of market this has been lately, in one or two sentences.'),
+    direction: enumOf(['uptrend', 'downtrend', 'range', 'unclear'], 'The prevailing structure.'),
+    volatility: enumOf(LEVEL, 'How much it has been moving.'),
+    confidence: confidence('How sure you are of this reading without live prices.'),
+  }),
+  drivers: arrayOf(
+    obj({
+      driver: str('The force acting on this pair, e.g. "policy rate differential".'),
+      side: enumOf(['supports_base', 'supports_quote', 'unclear'], 'Which currency it favours.'),
+      why: str('The mechanism, in plain language.'),
+      source_id: str('Source id if you retrieved one, otherwise "".'),
+    }),
+    'What is actually moving this pair.',
+    12,
+  ),
+  scheduled_events: arrayOf(
+    obj({
+      event: str('The release or decision, e.g. "FOMC rate decision".'),
+      when: str('Date and time with a timezone, or "unknown" — never guess a date.'),
+      importance: enumOf(IMPORTANCE, 'How much it typically moves this pair.'),
+      source_id: str('Source id if you retrieved one, otherwise "".'),
+    }),
+    'Known events ahead. If you could not retrieve a calendar, return an empty list and say so in a finding.',
+    12,
+  ),
+  data_available: {
+    type: 'boolean',
+    description:
+      'False if you could not retrieve live prices or a calendar and are reasoning from training ' +
+      'data alone. Answer honestly — the report states this to the user.',
+  },
+});
+
+export const TECHNICAL_SCHEMA = agentSchema('technical_analysis', {
+  pair: str('The currency pair this concerns.'),
+  price_basis: obj({
+    source: str('Where the prices came from, or "none — no price data was available".'),
+    as_of: str('Timestamp of the data, or "unknown".'),
+    live: { type: 'boolean', description: 'False when you had no live price feed.' },
+  }),
+  levels: arrayOf(
+    obj({
+      kind: enumOf(['support', 'resistance', 'pivot'], 'What kind of level this is.'),
+      price: str('The level as a price string. "unknown" if you had no data — never invent one.'),
+      basis: str('Why this level matters: what formed it.'),
+      strength: enumOf(LEVEL, 'How well it has held.'),
+    }),
+    'Levels that matter. With no price feed this must be empty rather than guessed.',
+    12,
+  ),
+  signals: arrayOf(
+    obj({
+      name: str('The observation, e.g. "lower highs since the April peak".'),
+      reads: enumOf(['bullish', 'bearish', 'neutral'], 'Which way it points.'),
+      timeframe: str('The timeframe it applies to, e.g. "daily".'),
+      caveat: str('What would make this reading wrong.'),
+    }),
+    'What the structure suggests.',
+    12,
+  ),
+  conflicts_with_context: strings('Where the technical read disagrees with the market context.'),
+});
+
+export const TRADE_THESIS_SCHEMA = agentSchema('trade_thesis', {
+  pair: str('The currency pair.'),
+  thesis: obj({
+    direction: enumOf(
+      ['long_base', 'short_base', 'stand_aside'],
+      'Long the base currency, short it, or do nothing. "stand_aside" is a real answer and often the right one.',
+    ),
+    reasoning: str('Why, in plain language, naming the drivers it rests on.'),
+    timeframe: str('Over what horizon this thesis is meant to play out.'),
+    conviction: confidence('0 to 1. Without live prices this cannot honestly exceed 0.5.'),
+  }),
+  invalidation: obj({
+    what_would_break_it: str('The specific development that would make this thesis wrong.'),
+    level: str('The price level that would prove it wrong, or "unknown" with no price data.'),
+    reasoning: str('Why that is the point at which the idea has failed.'),
+  }),
+  scenarios: arrayOf(
+    obj({
+      scenario: str('What happens.'),
+      likelihood: enumOf(LEVEL, 'How likely, relative to the others.'),
+      implication: str('What it would mean for the thesis.'),
+    }),
+    'The ways this could go, including the one where the thesis is wrong.',
+    6,
+  ),
+  what_to_watch: strings('The specific things to check before and after acting.'),
+  not_advice: str(
+    'One sentence, in your own words, stating that this is analysis rather than financial advice ' +
+    'and that the reader is responsible for their own position sizing and risk.',
+  ),
+});
+
 /** Schema for optional specialists (§9). Deliberately generic so a new agent
  *  can be added with a prompt and a roster entry and nothing else. */
 export const SPECIALIST_SCHEMA = (agentId: string): JsonSchema =>
@@ -499,6 +605,9 @@ export const CORRECTION_SCHEMA = (agentId: string): JsonSchema =>
   });
 
 export const SCHEMAS_BY_AGENT: Record<string, JsonSchema> = {
+  market_context: MARKET_CONTEXT_SCHEMA,
+  technical_analysis: TECHNICAL_SCHEMA,
+  trade_thesis: TRADE_THESIS_SCHEMA,
   task_manager: TASK_MANAGER_SCHEMA,
   research: RESEARCH_SCHEMA,
   competitor: COMPETITOR_SCHEMA,
