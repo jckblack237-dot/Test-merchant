@@ -30,8 +30,10 @@ import {
 import { canAct, useSession } from '../lib/session';
 import {
   AgentStatePill,
+  AlertMark,
   ConfidenceMeter,
   DECISION_LABEL,
+  DECISION_PILL,
   DECISION_TONE,
   Empty,
   ErrorNote,
@@ -46,6 +48,7 @@ import {
   formatMoney,
   formatTime,
 } from '../components/ui';
+import { AgentGlyph } from '../components/glyphs';
 import { Island } from '../components/Island';
 
 /** Statuses where the mission is still moving, and worth holding a stream open for. */
@@ -77,6 +80,11 @@ const EVENT_STATE: Partial<Record<MissionEventType, AgentState>> = {
   agent_failed: 'failed',
   agent_retrying: 'retrying',
   agent_skipped: 'skipped',
+  // A correction round is a real run of that agent, and it ends with
+  // `correction_applied` rather than `agent_completed`. Without this the last
+  // state-bearing event for a corrected agent stays `agent_started` and the map
+  // shows it working forever, on a mission that has already finished.
+  correction_applied: 'completed',
 };
 
 const TIMELINE_TONE: Partial<Record<MissionEventType, 'agent' | 'alert' | 'good'>> = {
@@ -335,7 +343,7 @@ export function MissionDetail() {
       <div className="stack">
         <div className="row row--between row--wrap row--top">
           <div className="page-head">
-            <div className="row row--wrap" style={{ gap: 8 }}>
+            <div className="row row--wrap">
               <span className="mission-item__ref">{mission.reference}</span>
               <StatusPill status={mission.status} />
               {live ? (
@@ -344,7 +352,7 @@ export function MissionDetail() {
                 </span>
               ) : null}
             </div>
-            <h1 className="page-head__title">{mission.userTask}</h1>
+            <h1 className="page-head__title page-head__title--task">{mission.userTask}</h1>
             <p className="page-head__sub">
               Started {formatDateTime(mission.startedAt ?? mission.createdAt)} by{' '}
               {mission.createdByName || 'someone'} ·{' '}
@@ -354,7 +362,7 @@ export function MissionDetail() {
             </p>
           </div>
 
-          <div className="row row--wrap" style={{ gap: 6, justifyContent: 'flex-end' }}>
+          <div className="row row--wrap">
             {mayControl && (mission.status === 'running' || mission.status === 'planning') ? (
               <button type="button" className="btn btn--sm btn--ghost" onClick={() => command('pause')} disabled={busy !== null}>
                 {busy === 'pause' ? 'Pausing…' : 'Pause'}
@@ -381,11 +389,11 @@ export function MissionDetail() {
           </div>
         </div>
 
-        {mission.objective ? <p className="small" style={{ margin: 0 }}>{mission.objective}</p> : null}
+        {mission.objective ? <span className="small">{mission.objective}</span> : null}
 
         {mission.engine === 'simulation' ? (
           <div className="sim-notice" role="alert">
-            <span aria-hidden="true">⚠️</span>
+            <AlertMark />
             <div className="stack stack--sm">
               <strong>This mission ran on the simulation engine. It is not research.</strong>
               <span>
@@ -425,11 +433,13 @@ export function MissionDetail() {
           label="Working now"
           value={currentAgent}
           note={
-            firstWorking
+            working.length > 1
               ? working.map((definition) => definition.name).join(', ')
-              : mission.status === 'completed'
-                ? 'Mission finished'
-                : 'Nobody is working'
+              : firstWorking
+                ? STAGE_LABEL[firstWorking.stage]
+                : mission.status === 'completed'
+                  ? 'Mission finished'
+                  : 'Nobody is working'
           }
         />
         <Stat
@@ -456,17 +466,17 @@ export function MissionDetail() {
         </div>
         {warnings.length > 0 ? (
           <div className="stack stack--sm">
-            <span className="strong small">Warnings ({warnings.length})</span>
-            <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+            <span className="eyebrow">Warnings ({warnings.length})</span>
+            <ul className="bullets small">
               {warnings.map((warning, index) => (
                 <li key={index}>{warning}</li>
               ))}
             </ul>
           </div>
         ) : (
-          <p className="small muted" style={{ margin: 0 }}>No warnings raised so far.</p>
+          <span className="small muted">No warnings raised so far.</span>
         )}
-        {streamNote ? <p className="launch__hint" style={{ margin: 0 }}>{streamNote}</p> : null}
+        {streamNote ? <span className="launch__hint">{streamNote}</span> : null}
       </div>
 
       <section className="card stack">
@@ -475,7 +485,7 @@ export function MissionDetail() {
           <span className="launch__hint">
             {activeTransfer
               ? `Handing off: ${activeTransfer.from} → ${activeTransfer.to}`
-              : 'Tap a hut to open that agent’s work.'}
+              : 'Select a station to open that agent’s work.'}
           </span>
         </div>
         <Island
@@ -519,18 +529,17 @@ export function MissionDetail() {
       {mission.status === 'completed' ? (
         <section className="card stack">
           <h2 className="report__heading">Ask a follow-up</h2>
-          <p className="small muted" style={{ margin: 0 }}>
+          <span className="small muted">
             Answered strictly from this mission's own findings and sources. If the answer is not in
             the package you will be told so, not guessed at.
-          </p>
+          </span>
 
           {pkg.followups.map((followup) => (
             <div key={followup.id} className="source-item">
-              <span className="source-ref" aria-hidden="true">💬</span>
-              <div className="grow">
-                <div className="strong small">{followup.question}</div>
-                <p className="prose" style={{ marginTop: 4 }}>{followup.answer}</p>
-                <div className="source-meta">{formatDateTime(followup.createdAt)}</div>
+              <div className="grow stack stack--sm">
+                <span className="strong">{followup.question}</span>
+                <p className="prose">{followup.answer}</p>
+                <span className="source-meta">{formatDateTime(followup.createdAt)}</span>
               </div>
             </div>
           ))}
@@ -589,6 +598,28 @@ function StageRail({
 
 // --- agent work -------------------------------------------------------------
 
+/** The disclosure caret. Two paths rather than one rotated path, so the mark
+ *  never depends on a transform the stylesheet would have to know about. */
+function Chevron({ open }: { open: boolean }) {
+  return (
+    <svg
+      className="muted"
+      viewBox="0 0 24 24"
+      width={14}
+      height={14}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d={open ? 'M6.6 9.6L12 15L17.4 9.6' : 'M9.6 6.6L15 12L9.6 17.4'} />
+    </svg>
+  );
+}
+
 function AgentPanel({
   definition,
   run,
@@ -610,6 +641,9 @@ function AgentPanel({
 
   return (
     <article className={`agent-card ${highlighted ? 'is-selected' : ''}`}>
+      {/* The only inline style left in these pages: a button has to be stripped
+          back to a plain row before it can wear a card's head, and no rule in
+          the sheet says that yet. */}
       <button
         type="button"
         className="agent-card__head"
@@ -617,7 +651,9 @@ function AgentPanel({
         aria-expanded={open}
         style={{ background: 'none', border: 0, padding: 0, width: '100%', textAlign: 'left' }}
       >
-        <span className="agent-card__emoji" aria-hidden="true">{definition.emoji}</span>
+        <span className="agent-card__emoji" aria-hidden="true">
+          <AgentGlyph agent={definition.id} size={18} />
+        </span>
         <span className="grow">
           <span className="agent-card__name">{definition.name}</span>
           <span className="agent-card__role">
@@ -627,11 +663,13 @@ function AgentPanel({
           </span>
         </span>
         <AgentStatePill state={state} />
-        <span aria-hidden="true" className="muted">{open ? '▾' : '▸'}</span>
+        <Chevron open={open} />
       </button>
 
       {run?.confidence !== null && run?.confidence !== undefined ? (
-        <ConfidenceMeter value={run.confidence} label="Agent confidence" />
+        <div className="agent-panel__confidence">
+          <ConfidenceMeter value={run.confidence} label="Agent confidence" />
+        </div>
       ) : null}
 
       {open ? (
@@ -641,7 +679,7 @@ function AgentPanel({
 
           {findings.length > 0 ? (
             <div className="stack stack--sm">
-              <span className="strong small">Findings</span>
+              <span className="eyebrow">Findings</span>
               {findings.map((finding) => (
                 <FindingRow key={finding.finding_id} finding={finding} />
               ))}
@@ -650,8 +688,8 @@ function AgentPanel({
 
           {output && output.issues.length > 0 ? (
             <div className="stack stack--sm">
-              <span className="strong small">Issues it raised</span>
-              <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+              <span className="eyebrow">Issues it raised</span>
+              <ul className="bullets small">
                 {output.issues.map((issue) => (
                   <li key={issue.issue_id}>
                     <span className={`pill pill--${issue.severity === 'high' ? 'negative' : 'warning'}`}>
@@ -668,8 +706,8 @@ function AgentPanel({
 
           {output && output.recommendations.length > 0 ? (
             <div className="stack stack--sm">
-              <span className="strong small">Recommendations</span>
-              <ol className="small" style={{ margin: 0, paddingLeft: 18 }}>
+              <span className="eyebrow">Recommendations</span>
+              <ol className="bullets small">
                 {[...output.recommendations]
                   .sort((a, b) => a.priority - b.priority)
                   .map((recommendation, index) => (
@@ -684,8 +722,8 @@ function AgentPanel({
 
           {output && output.assumptions.length > 0 ? (
             <div className="stack stack--sm">
-              <span className="strong small">Assumptions</span>
-              <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+              <span className="eyebrow">Assumptions</span>
+              <ul className="bullets small">
                 {output.assumptions.map((assumption, index) => (
                   <li key={index}>{assumption}</li>
                 ))}
@@ -695,7 +733,7 @@ function AgentPanel({
 
           {extras.length > 0 ? (
             <div className="stack stack--sm">
-              <span className="strong small">{definition.name} specifics</span>
+              <span className="eyebrow">{definition.name} specifics</span>
               <div className="kv">
                 {extras.map(([key, value]) => (
                   <Fragment key={key}>
@@ -723,12 +761,12 @@ function AgentPanel({
           {run ? <EnvelopeInspector missionId={run.missionId} runId={run.id} /> : null}
 
           {run ? (
-            <p className="source-meta" style={{ margin: 0 }}>
+            <span className="source-meta">
               {formatDateTime(run.startedAt)} · {formatDuration(run.durationMs)}
               {run.inputTokens !== null || run.outputTokens !== null
                 ? ` · ${run.inputTokens ?? 0} in / ${run.outputTokens ?? 0} out tokens`
                 : ''}
-            </p>
+            </span>
           ) : null}
         </div>
       ) : null}
@@ -779,16 +817,16 @@ function FindingRow({ finding }: { finding: Finding }) {
     <div className="source-item">
       <span className="source-ref">{finding.finding_id}</span>
       <div className="grow stack stack--sm">
-        <div className="row row--between row--wrap" style={{ gap: 8 }}>
+        <div className="row row--between row--wrap">
           <LabelChip label={finding.label} />
           <span className="source-meta">
             {finding.category} · importance {finding.importance}
           </span>
         </div>
-        <p className="small" style={{ margin: 0 }}>{finding.claim}</p>
+        <span className="small">{finding.claim}</span>
         <ConfidenceMeter value={finding.confidence} />
         {finding.evidence.length > 0 ? (
-          <ul className="source-meta" style={{ margin: 0, paddingLeft: 18 }}>
+          <ul className="bullets source-meta">
             {finding.evidence.map((evidence, index) => (
               <li key={index}>
                 {evidence.source_url ? (
@@ -804,9 +842,9 @@ function FindingRow({ finding }: { finding: Finding }) {
             ))}
           </ul>
         ) : (
-          <p className="source-meta" style={{ margin: 0 }}>
+          <span className="source-meta">
             No evidence attached — this claim rests on reasoning alone.
-          </p>
+          </span>
         )}
       </div>
     </div>
@@ -829,7 +867,7 @@ function Structured({ value }: { value: unknown }): ReactNode {
   if (Array.isArray(value)) {
     if (value.length === 0) return <span className="muted">none</span>;
     return (
-      <ul style={{ margin: 0, paddingLeft: 18 }}>
+      <ul className="bullets">
         {value.map((item, index) => (
           <li key={index}>
             <Structured value={item} />
@@ -865,9 +903,9 @@ function Timeline({ events, agents }: { events: MissionEvent[]; agents: AgentDef
         <span className="source-meta">{events.length} events</span>
       </div>
       {events.length === 0 ? (
-        <Empty icon="🕰️" title="Nothing has happened yet" body="Events appear the moment the island starts work." />
+        <Empty icon="" title="Nothing has happened yet" body="Events appear the moment the island starts work." />
       ) : (
-        <ol className="timeline scroller" style={{ margin: 0, padding: 0, listStyle: 'none' }}>
+        <ol className="timeline scroller">
           {events.slice(-250).map((event) => {
             const tone = TIMELINE_TONE[event.type];
             return (
@@ -897,30 +935,30 @@ function AuditTrail({ pkg }: { pkg: MissionPackage }) {
   return (
     <section className="card stack">
       <h2 className="report__heading">Challenges and corrections</h2>
-      <p className="small muted" style={{ margin: 0 }}>
+      <span className="small muted">
         Nothing is fixed silently. Every claim an agent changed after being challenged is here, with
         what it used to say.
-      </p>
+      </span>
 
       {pkg.corrections.length === 0 && challenges.length === 0 ? (
-        <Empty icon="⚖️" title="No corrections yet" body="No agent has had to correct another on this mission." />
+        <Empty icon="" title="No corrections yet" body="No agent has had to correct another on this mission." />
       ) : null}
 
       {pkg.corrections.map((correction) => (
         <div key={correction.id} className="source-item">
           <span className="source-ref">{correction.findingId}</span>
           <div className="grow">
-            <div className="row row--between row--wrap" style={{ gap: 8 }}>
+            <div className="row row--between row--wrap">
               <span className="small strong">
                 {correction.fromAgent} → {correction.toAgent}
               </span>
-              <span className="row" style={{ gap: 6 }}>
+              <span className="row">
                 <span className={`pill pill--${correction.severity === 'high' ? 'negative' : 'warning'}`}>
                   {correction.severity}
                 </span>
-                <span className="pill pill--muted">round {correction.round}</span>
+                <span className="pill pill--muted">Round {correction.round}</span>
                 <span className={`pill ${correction.resolved ? 'pill--positive' : 'pill--warning'}`}>
-                  {correction.resolved ? 'resolved' : 'open'}
+                  {correction.resolved ? 'Resolved' : 'Open'}
                 </span>
               </span>
             </div>
@@ -933,8 +971,8 @@ function AuditTrail({ pkg }: { pkg: MissionPackage }) {
 
       {challenges.length > 0 ? (
         <div className="stack stack--sm">
-          <span className="strong small">Challenges raised</span>
-          <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+          <span className="eyebrow">Challenges raised</span>
+          <ul className="bullets small">
             {challenges.map((event) => (
               <li key={event.id}>{event.message}</li>
             ))}
@@ -950,22 +988,22 @@ function VerificationPanel({ pkg, passed }: { pkg: MissionPackage; passed: boole
     return (
       <section className="card stack">
         <h2 className="report__heading">Verification</h2>
-        <p className="small muted" style={{ margin: 0 }}>
+        <span className="small muted">
           The Risk &amp; Verification agent has not reported on this mission yet.
-        </p>
+        </span>
       </section>
     );
   }
 
   return (
-    <section className="card card--flush stack" style={{ gap: 0 }}>
-      <div className="row row--between row--wrap" style={{ padding: 18 }}>
+    <section className="stack">
+      <div className="row row--between row--wrap">
         <h2 className="report__heading">Verification</h2>
         <span className={`pill ${passed ? 'pill--positive' : 'pill--negative'}`}>
-          {passed === null ? 'in progress' : passed ? 'gate passed' : 'gate failed'}
+          {passed === null ? 'In progress' : passed ? 'Gate passed' : 'Gate failed'}
         </span>
       </div>
-      <div className="table-wrap">
+      <div className="card card--flush table-wrap">
         <table className="table">
           <thead>
             <tr>
@@ -995,8 +1033,8 @@ function VerificationPanel({ pkg, passed }: { pkg: MissionPackage; passed: boole
                     {record.status.replace(/_/g, ' ')}
                   </span>
                 </td>
-                <td className="small" style={{ maxWidth: 320 }}>{record.reason}</td>
-                <td className="small" style={{ maxWidth: 260 }}>
+                <td className="small">{record.reason}</td>
+                <td className="small">
                   {record.resolved ? record.correctedValue || 'Resolved' : record.recommendedAction}
                 </td>
                 <td className="small tabular">{record.round}</td>
@@ -1017,10 +1055,10 @@ function SourceRegister({ pkg }: { pkg: MissionPackage }) {
         <span className="source-meta">{pkg.sources.length} sources</span>
       </div>
       {pkg.sources.length === 0 ? (
-        <p className="small muted" style={{ margin: 0 }}>
+        <span className="small muted">
           No source has been recorded on this mission. Every claim made without one carries a label
           saying so.
-        </p>
+        </span>
       ) : (
         pkg.sources.map((source) => (
           <div key={source.source_id} className="source-item">
@@ -1057,18 +1095,16 @@ function ReportView({ report }: { report: FinalReport }) {
           <span className="verdict__text">{DECISION_LABEL[decision]}</span>
           <p className="prose">{report.recommendation.reason}</p>
         </div>
-        <div style={{ minWidth: 200 }}>
-          <ConfidenceMeter
-            value={report.overall_confidence}
-            label="Overall confidence"
-            note={report.confidence_explanation}
-          />
-        </div>
+        <ConfidenceMeter
+          value={report.overall_confidence}
+          label="Overall confidence"
+          note={report.confidence_explanation}
+        />
       </div>
 
       {report.simulation_notice ? (
         <div className="sim-notice" role="alert">
-          <span aria-hidden="true">⚠️</span>
+          <AlertMark />
           <span>{report.simulation_notice}</span>
         </div>
       ) : null}
@@ -1079,13 +1115,13 @@ function ReportView({ report }: { report: FinalReport }) {
 
       <ReportSection title="2. Key findings">
         {report.key_findings.length === 0 ? (
-          <p className="small muted" style={{ margin: 0 }}>No finding survived review.</p>
+          <span className="small muted">No finding survived review.</span>
         ) : (
           report.key_findings.map((finding, index) => (
             <div key={index} className="source-item">
               <span className="source-ref">{index + 1}</span>
               <div className="grow stack stack--sm">
-                <div className="row row--between row--wrap" style={{ gap: 8 }}>
+                <div className="row row--between row--wrap">
                   <LabelChip label={finding.label} />
                   <span className="source-meta">
                     {finding.evidence.length > 0
@@ -1093,7 +1129,7 @@ function ReportView({ report }: { report: FinalReport }) {
                       : 'No evidence cited'}
                   </span>
                 </div>
-                <p className="small" style={{ margin: 0 }}>{finding.finding}</p>
+                <span className="small">{finding.finding}</span>
                 <ConfidenceMeter value={finding.confidence} />
               </div>
             </div>
@@ -1123,7 +1159,7 @@ function ReportView({ report }: { report: FinalReport }) {
           <Stat label="Monthly cost" value={formatMoney(report.financial_summary.estimated_monthly_cost, currency)} note="estimate" />
           <Stat label="Monthly revenue" value={formatMoney(report.financial_summary.estimated_monthly_revenue, currency)} note="estimate" />
         </div>
-        <p className="small muted" style={{ margin: 0 }}>{report.financial_summary.note}</p>
+        <span className="small muted">{report.financial_summary.note}</span>
       </ReportSection>
 
       <ReportSection title="8. Major risks">
@@ -1142,11 +1178,11 @@ function ReportView({ report }: { report: FinalReport }) {
             tone={report.verification.high_risk_items > 0 ? 'negative' : undefined}
           />
         </div>
-        <p className="small" style={{ margin: 0 }}>
+        <span className="small">
           {report.verification.passed ? 'The verification gate passed' : 'The verification gate did not pass'}{' '}
           after {report.verification.rounds_used} correction round
           {report.verification.rounds_used === 1 ? '' : 's'}.
-        </p>
+        </span>
       </ReportSection>
 
       <ReportSection title="10. Strategy">
@@ -1154,15 +1190,17 @@ function ReportView({ report }: { report: FinalReport }) {
       </ReportSection>
 
       <ReportSection title="11. Recommendation">
-        <p className="strong" style={{ margin: 0 }}>{DECISION_LABEL[decision]}</p>
+        <div className="row row--wrap">
+          <span className={`pill ${DECISION_PILL[decision]}`}>{DECISION_LABEL[decision]}</span>
+        </div>
         <p className="prose">{report.recommendation.reason}</p>
       </ReportSection>
 
       <ReportSection title="12. Action plan">
         {report.action_plan.length === 0 ? (
-          <p className="small muted" style={{ margin: 0 }}>No action plan was produced.</p>
+          <span className="small muted">No action plan was produced.</span>
         ) : (
-          <ol className="small" style={{ margin: 0, paddingLeft: 18 }}>
+          <ol className="bullets small">
             {[...report.action_plan]
               .sort((a, b) => a.priority - b.priority)
               .map((item, index) => (
@@ -1183,8 +1221,8 @@ function ReportView({ report }: { report: FinalReport }) {
         <Bullets items={report.unresolved_questions} empty="Nothing was left open." />
         {report.unresolved_issues.length > 0 ? (
           <div className="stack stack--sm">
-            <span className="strong small">Unresolved issues</span>
-            <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+            <span className="eyebrow">Unresolved issues</span>
+            <ul className="bullets small">
               {report.unresolved_issues.map((issue) => (
                 <li key={issue.issue_id}>
                   <span className={`pill pill--${issue.severity === 'high' ? 'negative' : 'warning'}`}>
@@ -1201,7 +1239,7 @@ function ReportView({ report }: { report: FinalReport }) {
 
       <ReportSection title="15. Corrections made">
         {report.corrections.length === 0 ? (
-          <p className="small muted" style={{ margin: 0 }}>No claim had to be corrected.</p>
+          <span className="small muted">No claim had to be corrected.</span>
         ) : (
           report.corrections.map((correction) => (
             <div key={correction.id} className="source-item">
@@ -1220,9 +1258,9 @@ function ReportView({ report }: { report: FinalReport }) {
 
       <ReportSection title="16. Sources">
         {report.sources.length === 0 ? (
-          <p className="small muted" style={{ margin: 0 }}>
+          <span className="small muted">
             No source was consulted on this mission. Weigh every claim above accordingly.
-          </p>
+          </span>
         ) : (
           report.sources.map((source) => (
             <div key={source.source_id} className="source-item">
@@ -1265,10 +1303,10 @@ function ReportView({ report }: { report: FinalReport }) {
             </tbody>
           </table>
         </div>
-        <p className="source-meta" style={{ margin: 0 }}>
+        <span className="source-meta">
           {report.mission_reference} · generated {formatDateTime(report.generated_at)} · engine{' '}
           {report.engine}
-        </p>
+        </span>
       </ReportSection>
     </div>
   );
@@ -1284,9 +1322,9 @@ function ReportSection({ title, children }: { title: string; children: ReactNode
 }
 
 function Bullets({ items, empty }: { items: string[]; empty: string }) {
-  if (items.length === 0) return <p className="small muted" style={{ margin: 0 }}>{empty}</p>;
+  if (items.length === 0) return <span className="small muted">{empty}</span>;
   return (
-    <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+    <ul className="bullets small">
       {items.map((item, index) => (
         <li key={index}>{item}</li>
       ))}

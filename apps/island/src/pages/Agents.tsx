@@ -8,6 +8,7 @@ import {
 } from '../lib/api';
 import { canAct, useSession } from '../lib/session';
 import { ErrorNote, Loading, Modal, STAGE_LABEL, STAGE_ORDER } from '../components/ui';
+import { AgentGlyph } from '../components/glyphs';
 
 export function Agents() {
   const { user } = useSession();
@@ -63,31 +64,33 @@ export function Agents() {
   return (
     <div className="stack stack--lg">
       <div className="page-head">
-        <h1 className="page-head__title">The roster</h1>
+        <h1 className="page-head__title">Agents</h1>
         <p className="page-head__sub">
           Every agent is a separate model call with its own instructions, its own input and its own
           output contract — not one model playing several parts. Stages run in order; agents inside a
           stage run together when their dependencies allow. Switching an agent off here switches it
           off for every future mission on this account.
         </p>
-        <p className="launch__hint">
+        <span className="launch__hint">
           Engine: {roster.engineLabel}
           {roster.simulation
             ? ' — no model credential is configured, so these agents return placeholders rather than research.'
             : '.'}
-        </p>
+        </span>
       </div>
 
       {error ? <ErrorNote message={error} /> : null}
 
       {byStage.map((group) => (
         <section key={group.stage} className="stack">
-          <h2 className="report__heading">{STAGE_LABEL[group.stage]}</h2>
+          <h2 className="eyebrow">{STAGE_LABEL[group.stage]}</h2>
           <div className="agent-grid">
             {group.entries.map(({ definition, enabled }) => (
               <article key={definition.id} className={`agent-card ${enabled ? '' : 'agent-card--off'}`}>
                 <div className="agent-card__head">
-                  <span className="agent-card__emoji" aria-hidden="true">{definition.emoji}</span>
+                  <span className="agent-card__emoji" aria-hidden="true">
+                    <AgentGlyph agent={definition.id} size={18} />
+                  </span>
                   <div className="grow">
                     <div className="agent-card__name">{definition.name}</div>
                     <div className="agent-card__role">{definition.role}</div>
@@ -111,11 +114,11 @@ export function Agents() {
 
                 <p className="agent-card__body">{definition.summary}</p>
 
-                <div className="row row--wrap" style={{ gap: 6 }}>
+                <div className="row row--wrap">
                   <span className="pill pill--muted">{definition.core ? 'Core agent' : 'Specialist'}</span>
                   <span className="pill pill--muted">{STAGE_LABEL[definition.stage]}</span>
                   <span className={`pill ${definition.webSearch ? 'pill--info' : 'pill--muted'}`}>
-                    {definition.webSearch ? '🌐 Can search the web' : 'No web access'}
+                    {definition.webSearch ? 'Can search the web' : 'No web access'}
                   </span>
                 </div>
 
@@ -137,19 +140,19 @@ export function Agents() {
       ))}
 
       {!mayToggle ? (
-        <p className="small muted" style={{ margin: 0 }}>
+        <span className="small muted">
           Only managers and owners can change which agents run. Anyone can read what they were told to
           do.
-        </p>
+        </span>
       ) : null}
 
       {prompt ? (
-        <Modal title={`${prompt.emoji} ${prompt.name} — system prompt`} onClose={() => setPrompt(null)} wide>
+        <Modal title={`${prompt.name} — system prompt`} onClose={() => setPrompt(null)} wide>
           <div className="stack stack--sm">
-            <p className="small muted" style={{ margin: 0 }}>
+            <span className="small muted">
               This is the exact instruction this agent is given on every mission. You are entitled to
               read what the thing acting on your behalf was told to do.
-            </p>
+            </span>
             <pre className="prose mono scroller">
               {prompt.systemPrompt || 'The server did not return this agent’s prompt.'}
             </pre>

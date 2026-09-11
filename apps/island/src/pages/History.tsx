@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { describeError, listMissions, type MissionRecord, type MissionStatus } from '../lib/api';
 import {
   DECISION_LABEL,
+  DECISION_PILL,
   Empty,
   ErrorNote,
   Loading,
@@ -14,7 +15,7 @@ import {
 const PAGE = 25;
 
 const FILTERS: { value: MissionStatus | 'all'; label: string }[] = [
-  { value: 'all', label: 'Everything' },
+  { value: 'all', label: 'All' },
   { value: 'running', label: 'Running' },
   { value: 'awaiting_approval', label: 'Waiting for you' },
   { value: 'completed', label: 'Completed' },
@@ -91,8 +92,8 @@ export function History() {
         <Loading rows={3} />
       ) : missions.length === 0 ? (
         <Empty
-          icon="🧭"
-          title="No missions here"
+          icon=""
+          title="No missions yet"
           body="Give the island a question and it starts work immediately."
           action={
             <Link className="btn btn--sm" to="/">
@@ -105,28 +106,30 @@ export function History() {
           <div className="mission-list">
             {missions.map((mission) => (
               <Link key={mission.id} className="mission-item" to={`/missions/${mission.id}`}>
-                <span className="grow">
-                  <span className="mission-item__ref">{mission.reference}</span>
-                  <span className="mission-item__task truncate" style={{ display: 'block' }}>
-                    {mission.userTask}
-                  </span>
-                  <span className="mission-item__meta">
+                {/* Blocks rather than spans: the three lines stack on their own,
+                    which is one less thing for the stylesheet to have to say. */}
+                <div className="grow">
+                  <div className="mission-item__ref">{mission.reference}</div>
+                  <div className="mission-item__task truncate">{mission.userTask}</div>
+                  <div className="mission-item__meta">
                     {formatDateTime(mission.startedAt ?? mission.createdAt)} ·{' '}
                     {mission.createdByName || 'unknown'} ·{' '}
                     {mission.mode === 'approval' ? 'approval gates' : 'automatic'}
                     {mission.engine === 'simulation' ? ' · simulated' : ''}
-                  </span>
-                </span>
+                  </div>
+                </div>
 
-                <span className="row row--wrap" style={{ gap: 8, justifyContent: 'flex-end' }}>
+                <div className="row row--wrap">
                   {mission.decision ? (
-                    <span className="small">{DECISION_LABEL[mission.decision]}</span>
+                    <span className={`pill ${DECISION_PILL[mission.decision]}`}>
+                      {DECISION_LABEL[mission.decision]}
+                    </span>
                   ) : null}
                   {mission.confidence === null ? null : (
                     <span className="small tabular muted">{formatPercent(mission.confidence)}</span>
                   )}
                   <StatusPill status={mission.status} />
-                </span>
+                </div>
               </Link>
             ))}
           </div>

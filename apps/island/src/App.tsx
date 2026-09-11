@@ -11,6 +11,7 @@ import {
   type SessionPayload,
 } from './lib/api';
 import { SessionContext, type SessionValue } from './lib/session';
+import { IslandMark } from './components/ui';
 import { SignIn } from './pages/SignIn';
 import { MissionControl } from './pages/MissionControl';
 import { MissionDetail } from './pages/MissionDetail';
@@ -55,10 +56,10 @@ export function App() {
     return (
       <div className="auth-page">
         <div className="stack stack--sm center">
-          <span className="app__mark" style={{ width: 44, height: 44, fontSize: 22 }} aria-hidden="true">
-            🏝️
+          <span className="app__mark app__mark--lg" aria-hidden="true">
+            <IslandMark size={22} />
           </span>
-          <span className="muted small">Sailing you back to the island…</span>
+          <span className="muted small">Restoring your session…</span>
         </div>
       </div>
     );
@@ -113,7 +114,9 @@ function Router({
       <div className="app">
         <header className="app__nav">
           <Link className="app__brand" to="/">
-            <span className="app__mark" aria-hidden="true">🏝️</span>
+            <span className="app__mark" aria-hidden="true">
+              <IslandMark />
+            </span>
             AI Agent Island
           </Link>
 

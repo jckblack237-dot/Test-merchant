@@ -1,4 +1,5 @@
 import { useId, useMemo, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { AgentGlyph } from './glyphs';
 import { AGENT_STATE_LABEL, STAGE_LABEL, type AgentState, type Stage } from './ui';
 
 /** Just enough of an agent definition to draw it. Anything wider than this is
@@ -21,7 +22,7 @@ export interface IslandProps {
   selected?: string | null;
 }
 
-/** The one agent that gets a headquarters rather than a hut. */
+/** The one agent marked as a capital rather than as a station. */
 const HQ_AGENT_ID = 'chief_ai';
 
 /** The habitable strip of the viewBox. Registry coordinates are advisory — an
@@ -42,6 +43,8 @@ const SHORE = [
   'C25.7 56.4 20.4 53.0 17.0 50.0 C13.6 47.0 8.8 42.1 8.0 38.0 Z',
 ].join(' ');
 
+// The first inland contour, hand-tuned to sit an even distance inside the
+// coast. The contours below it are this same line stepped down in size.
 const GRASS = [
   'M11.6 37.6 C10.8 33.9 13.1 27.5 15.0 24.0 C16.8 20.6 20.7 17.0 23.9 15.2',
   'C27.1 13.4 32.1 12.1 35.8 12.1 C39.5 12.1 44.3 15.0 48.1 15.1',
@@ -52,20 +55,36 @@ const GRASS = [
   'C28.3 53.9 23.4 51.0 20.2 48.4 C17.0 45.8 12.4 41.4 11.6 37.6 Z',
 ].join(' ');
 
-/** Two low hills, set in the quarters of the island no agent is placed in. */
-const RIDGES = [
-  'M17 44 C20.5 39 26 37.5 30.5 39.5 C34.5 41.3 36 44.5 34.5 47 C28 49.5 21 48.5 17 44 Z',
-  'M74 21 C77 17 82 16.5 85 19 C87 20.7 87.5 23.5 86 25.5 C81.5 27 76.5 25.5 74 21 Z',
-];
+/** The middle of the island, and so the point every concentric line on the map
+ *  is scaled about. Deriving the contours from the coastline instead of drawing
+ *  them by hand keeps them parallel to it and guarantees they never cross. */
+const ISLAND_CENTRE = { x: 50, y: 35.6 };
 
-/** One swell is 28 units wide, which is exactly how far the stylesheet drifts
- *  it, so the loop never shows a seam. Each line starts off-canvas for the
- *  same reason. */
-const SWELL = 'q7 -2.6 14 0 t14 0 t14 0 t14 0 t14 0 t14 0 t14 0 t14 0 t14 0 t14 0 t14 0';
-const WAVES = [5, 19, 51, 66].map((y) => `M-28 ${y} ${SWELL}`);
+/** Two bathymetry rings just offshore, and three relief contours inland. The
+ *  stroke scales with the shape, so the inner lines come out fainter than the
+ *  outer ones — which is the direction relief should fade anyway. */
+const DEPTH_SCALES = [1.07, 1.16];
+const CONTOUR_SCALES = [1, 0.8, 0.6];
+
+/** Station geometry, in map units, and the tightest constraint on this map.
+ *
+ *  The registry lays agents out on a 6-column, 3-row grid, so once SPAN has
+ *  mapped them the rows land 16.07 units apart. A station's state ring reaches
+ *  4.45 units out (r 4.2 plus half of its 0.5 stroke), which leaves 7.17 units
+ *  of clear air between one row's ring and the next row's. The phone bump takes
+ *  the labels to 2.9px with a 0.85px halo stroke, and two lines of that at 1.05
+ *  leading need 6.6 of those 7.17 units. Every number below is what is left
+ *  after that sum, so raising any of them means re-doing it. */
+const STATION_R = 3.6;
+const HQ_R = 4.8;
+const RING_GAP = 0.6;
+const HALO_GAP = 1.1;
+const FOCUS_GAP = 1.3;
+const LABEL_DROP = 3.7;
+const LABEL_LEADING = '1.05em';
 
 /** A badge as well as a colour, so the states stay apart for anyone who cannot
- *  tell teal from green. */
+ *  tell amber from green. */
 const STATE_BADGE: Partial<Record<AgentState, string>> = {
   completed: '✓',
   failed: '!',
@@ -98,6 +117,20 @@ function n(value: number): string {
   return value.toFixed(2);
 }
 
+/** Radii are derived by addition, which is enough to put binary noise into the
+ *  rendered attribute. Two places is finer than a map unit ever needs. */
+function round(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+/** Scale a shape about the middle of the island without moving it. */
+function concentric(scale: number): string {
+  return (
+    `translate(${n(ISLAND_CENTRE.x)} ${n(ISLAND_CENTRE.y)}) scale(${scale}) ` +
+    `translate(${n(-ISLAND_CENTRE.x)} ${n(-ISLAND_CENTRE.y)})`
+  );
+}
+
 interface Point {
   x: number;
   y: number;
@@ -112,8 +145,8 @@ interface Node {
 function place(agent: IslandAgent, hq: boolean): Point {
   const x = SPAN.x0 + (clamp(agent.map.x, 0, 100) / 100) * (SPAN.x1 - SPAN.x0);
   const y = SPAN.y0 + (clamp(agent.map.y, 0, 70) / 70) * (SPAN.y1 - SPAN.y0);
-  // Headquarters is twice the size of a hut and flies a flag, so it needs more
-  // room on every side than the huts do.
+  // The capital is drawn a third larger than a station, so it needs more room
+  // on every side before its ring runs off the frame.
   return hq ? { x: clamp(x, 16, 84), y: clamp(y, 17, 52) } : { x, y };
 }
 
@@ -129,8 +162,8 @@ function trailPath(from: Point, to: Point): string {
   return `M${n(from.x)} ${n(from.y)} Q${n(cx)} ${n(cy)} ${n(to.x)} ${n(to.y)}`;
 }
 
-/** Two short lines sit under a hut far better than one long one. The full name
- *  is still on the hut's label and tooltip. */
+/** Two short lines sit under a station far better than one long one. The full
+ *  name is still on the station's own label and tooltip. */
 function nameLines(name: string): string[] {
   const words = name.replace(/\s+agents?$/i, '').split(/\s+/).filter(Boolean);
   const lines: string[] = [];
@@ -154,8 +187,8 @@ function stateOf(states: Record<string, AgentState>, agentId: string): AgentStat
 }
 
 export function Island({ agents, states, activeTransfer, onSelect, selected }: IslandProps) {
-  // Gradient ids are document-global, so two maps on one page would otherwise
-  // share — and fight over — the same fills.
+  // Gradient and filter ids are document-global, so two maps on one page would
+  // otherwise share — and fight over — the same paint.
   const uid = useId().replace(/:/g, '');
   const select = onSelect;
 
@@ -212,12 +245,16 @@ export function Island({ agents, states, activeTransfer, onSelect, selected }: I
       `${busy.length ? ` ${busy.join(' and ')} working.` : ''}${handing ? ` ${handing}` : ''}`
     : 'No agents on this mission.';
 
-  function renderHut(node: Node) {
+  function renderStation(node: Node) {
     const { agent, point, hq } = node;
     const state = stateOf(states, agent.id);
     const badge = STATE_BADGE[state];
-    const ring = hq ? 9.6 : 6.4;
-    const ringY = hq ? -1.8 : -0.7;
+    const r = hq ? HQ_R : STATION_R;
+    // The glyph fills 55% of the disc, and the badge straddles the ring on the
+    // upper-right diagonal, which is the one quarter no label ever reaches.
+    const glyph = round(r * 1.1);
+    const badgeR = hq ? 1.5 : 1.4;
+    const badgeAt = round(r * 0.72);
     const label = `${agent.name}, ${STAGE_LABEL[agent.stage]} stage, ${AGENT_STATE_LABEL[state].toLowerCase()}`;
 
     const classes = ['island-hut', `island-hut--${state}`];
@@ -249,38 +286,28 @@ export function Island({ agents, states, activeTransfer, onSelect, selected }: I
         }
       >
         <title>{`${agent.name} — ${AGENT_STATE_LABEL[state]}. ${agent.summary}`}</title>
-        <circle className="island-hut__focus" cy={ringY} r={ring + 2} />
-        <circle className="island-hut__halo" cy={ringY} r={ring} />
-        <circle className="island-hut__pulse" cy={ringY} r={ring} />
-        <circle className="island-hut__ring" cy={ringY} r={ring} />
+        <circle className="island-hut__focus" r={round(r + FOCUS_GAP)} />
+        <circle className="island-hut__halo" r={round(r + HALO_GAP)} />
+        <circle className="island-hut__pulse" r={round(r + RING_GAP)} />
+        <circle className="island-hut__disc" r={r} />
+        {/* The ring paints after the disc because the ring is the state, and
+            state has to be the thing that survives being overlapped. */}
+        <circle className="island-hut__ring" r={round(r + RING_GAP)} />
 
         {hq ? (
-          <>
-            <circle className="island-hut__beacon-glow" cy={-13.2} r={2.5} fill={`url(#${uid}-beacon)`} />
-            <path className="island-hut__mast" d="M0 -8.6 V-12.9" />
-            <path className="island-hut__flag" d="M0.2 -12.7 L5 -11.5 L0.2 -10.3 Z" />
-            <circle className="island-hut__beacon" cy={-13.2} r={0.8} />
-            <path className="island-hut__roof" d="M-8.4 -3.9 L0 -8.6 L8.4 -3.9 Z" />
-            <rect className="island-hut__wall" x={-7} y={-3.9} width={14} height={5.4} rx={0.8} />
-            <rect className="island-hut__hq-window" x={-5.8} y={-2.5} width={2} height={1.5} rx={0.3} />
-            <rect className="island-hut__hq-window" x={3.8} y={-2.5} width={2} height={1.5} rx={0.3} />
-            <text className="island-hut__emoji" y={-1.1}>{agent.emoji}</text>
-            <rect className="island-hut__hq-base" x={-8.8} y={1.5} width={17.6} height={3.1} rx={1.1} />
-            <text className="island-hut__hq-sign" y={3.1}>COMMAND HQ</text>
-          </>
+          // A capital is marked with a ring and a filled centre, not with a
+          // picture of a building.
+          <circle className="island-hut__core" r={1.5} />
         ) : (
-          <>
-            <path className="island-hut__roof" d="M-4.9 -0.9 L0 -5.2 L4.9 -0.9 Z" />
-            <rect className="island-hut__wall" x={-3.8} y={-0.9} width={7.6} height={4.6} rx={0.6} />
-            <path className="island-hut__post" d="M-3.8 3.7 H3.8" />
-            <text className="island-hut__emoji" y={1.5}>{agent.emoji}</text>
-          </>
+          <g transform={`translate(${n(-glyph / 2)} ${n(-glyph / 2)})`}>
+            <AgentGlyph agent={agent.id} size={glyph} className="island-hut__glyph" />
+          </g>
         )}
 
         {badge ? (
           <g aria-hidden="true">
-            <circle className="island-hut__badge-disc" cx={ring * 0.72} cy={ringY - ring * 0.72} r={1.7} />
-            <text className="island-hut__badge-mark" x={ring * 0.72} y={ringY - ring * 0.72}>
+            <circle className="island-hut__badge-disc" cx={n(badgeAt)} cy={n(-badgeAt)} r={badgeR} />
+            <text className="island-hut__badge-mark" x={n(badgeAt)} y={n(-badgeAt)}>
               {badge}
             </text>
           </g>
@@ -295,10 +322,14 @@ export function Island({ agents, states, activeTransfer, onSelect, selected }: I
     if (hq) classes.push('island-hut__name--hq');
     if (stateOf(states, agent.id) === 'skipped') classes.push('island-hut__name--dim');
 
+    const y = point.y + (hq ? HQ_R : STATION_R) + LABEL_DROP;
+
     return (
-      <text key={agent.id} className={classes.join(' ')} x={n(point.x)} y={n(point.y + (hq ? 10.4 : 8.4))}>
+      <text key={agent.id} className={classes.join(' ')} x={n(point.x)} y={n(y)}>
         {nameLines(agent.name).map((line, index) => (
-          <tspan key={line} x={n(point.x)} dy={index === 0 ? 0 : 2.9}>
+          // Leading is set in em so the phone type bump moves the second line
+          // with the first instead of crowding it.
+          <tspan key={line} x={n(point.x)} dy={index === 0 ? 0 : LABEL_LEADING}>
             {line}
           </tspan>
         ))}
@@ -328,26 +359,42 @@ export function Island({ agents, states, activeTransfer, onSelect, selected }: I
             <stop className="island-map__stop--land-top" offset="0" />
             <stop className="island-map__stop--land-deep" offset="1" />
           </linearGradient>
-          <radialGradient id={`${uid}-beacon`}>
+          <radialGradient id={`${uid}-glow`}>
             <stop className="island-map__stop--glow-in" offset="0" />
             <stop className="island-map__stop--glow-out" offset="1" />
           </radialGradient>
+          <filter id={`${uid}-lift`} x="-25%" y="-25%" width="150%" height="150%">
+            <feDropShadow
+              className="island-map__lift"
+              dx="0"
+              dy="1.6"
+              stdDeviation="2.6"
+              floodColor="#000000"
+              floodOpacity="0.12"
+            />
+          </filter>
         </defs>
 
-        <rect x="0" y="0" width="100" height="70" fill={`url(#${uid}-sea)`} />
+        <rect className="island-map__sea" x="0" y="0" width="100" height="70" fill={`url(#${uid}-sea)`} />
 
+        {/* Bathymetry: the coastline stepped outwards twice. Two hairlines are
+            the whole suggestion of water — there is no drawing of a sea here. */}
         <g className="island-map__waves" aria-hidden="true">
-          {WAVES.map((d) => (
-            <path key={d} className="island-map__wave" d={d} />
+          {DEPTH_SCALES.map((scale) => (
+            <path key={scale} className="island-map__wave" d={SHORE} transform={concentric(scale)} />
           ))}
         </g>
 
-        <path className="island-map__surf" d={SHORE} />
-        <path className="island-map__shore" d={SHORE} fill={`url(#${uid}-shore)`} />
-        <path className="island-map__land" d={GRASS} fill={`url(#${uid}-land)`} />
-        {RIDGES.map((d) => (
-          <path key={d} className="island-map__ridge" d={d} />
-        ))}
+        {/* The shore path exists only to cast the shadow: the land is drawn on
+            top of it with the same outline, so its own fill never shows. */}
+        <path className="island-map__shore" d={SHORE} fill={`url(#${uid}-shore)`} filter={`url(#${uid}-lift)`} />
+        <path className="island-map__land" d={SHORE} fill={`url(#${uid}-land)`} />
+
+        <g className="island-map__contours" aria-hidden="true">
+          {CONTOUR_SCALES.map((scale) => (
+            <path key={scale} className="island-map__contour" d={GRASS} transform={concentric(scale)} />
+          ))}
+        </g>
 
         <g className="island-map__trails" aria-hidden="true">
           {layout.trails.map((trail) => (
@@ -363,17 +410,16 @@ export function Island({ agents, states, activeTransfer, onSelect, selected }: I
           <g className="island-map__packet" aria-hidden="true">
             <path className="island-map__packet-trail" d={transfer.d} pathLength={100} />
             <g className="island-map__packet-dot" style={{ offsetPath: `path('${transfer.d}')` }}>
-              <circle className="island-map__packet-halo" r={2.6} />
-              <rect className="island-map__packet-box" x={-1.5} y={-1.1} width={3} height={2.2} rx={0.4} />
-              <path className="island-map__packet-seal" d="M-1.5 -1.1 L0 0.1 L1.5 -1.1" />
+              <circle className="island-map__packet-halo" r={2.4} fill={`url(#${uid}-glow)`} />
+              <circle className="island-map__packet-disc island-map__packet-box" r={1.1} />
             </g>
           </g>
         ) : null}
 
-        <g>{layout.nodes.map(renderHut)}</g>
+        <g>{layout.nodes.map(renderStation)}</g>
 
-        {/* Names paint last so a neighbouring hut can never bury one. They
-            repeat what each hut's own label already says. */}
+        {/* Names paint last so a neighbouring station can never bury one. They
+            repeat what each station's own label already says. */}
         <g className="island-map__labels" aria-hidden="true">{layout.nodes.map(renderLabel)}</g>
       </svg>
 

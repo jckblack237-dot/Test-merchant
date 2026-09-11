@@ -9,7 +9,8 @@ import {
   type RosterResponse,
 } from '../lib/api';
 import { canAct, useSession } from '../lib/session';
-import { ErrorNote, Loading, STAGE_LABEL } from '../components/ui';
+import { AlertMark, ErrorNote, Loading, STAGE_LABEL } from '../components/ui';
+import { AgentGlyph } from '../components/glyphs';
 import { Island } from '../components/Island';
 
 const MODES: { value: MissionMode; title: string; body: string }[] = [
@@ -64,8 +65,8 @@ export function MissionControl() {
       .map((entry) => entry.definition.id);
   }, [roster, picked]);
 
-  // The idle map previews the crew: whoever is on this mission waits on the
-  // beach, whoever is switched off is greyed out as skipped.
+  // The idle map previews the crew: whoever is on this mission waits at their
+  // station, whoever is switched off is greyed out as skipped.
   const states = useMemo(() => {
     const sailing = new Set(chosen);
     const map: Record<string, AgentState> = {};
@@ -121,7 +122,7 @@ export function MissionControl() {
 
       {roster.simulation ? (
         <div className="sim-notice" role="alert">
-          <span aria-hidden="true">⚠️</span>
+          <AlertMark />
           <div className="stack stack--sm">
             <strong>Simulation engine — nothing here will be researched.</strong>
             <span>
@@ -133,18 +134,18 @@ export function MissionControl() {
           </div>
         </div>
       ) : (
-        <p className="launch__hint" style={{ margin: 0 }}>
+        <span className="launch__hint">
           Engine: {roster.engineLabel}. Agents allowed to search will cite every source they read.
-        </p>
+        </span>
       )}
 
       <form className="stack stack--lg" onSubmit={submit}>
         <div className="card card--sea launch">
           <label className="field">
-            <span className="page-head__title">What do you want the AI Island to investigate?</span>
+            <span className="field__label">The question</span>
             <textarea
               className="textarea"
-              style={{ minHeight: 132, fontSize: 15 }}
+              rows={5}
               value={task}
               onChange={(event) => setTask(event.target.value)}
               placeholder="e.g. Should I open a speciality coffee shop in Galway city centre? I have €60,000 and no hospitality experience."
@@ -162,15 +163,15 @@ export function MissionControl() {
               {chosen.length} agent{chosen.length === 1 ? '' : 's'} · {chosenMode?.title.toLowerCase()}
             </span>
             <button className="btn btn--lg" type="submit" disabled={!mayStart || busy || !task.trim()}>
-              {busy ? 'Launching…' : 'START MISSION 🚀'}
+              {busy ? 'Starting…' : 'Start mission'}
             </button>
           </div>
 
           {!mayStart ? (
-            <p className="small muted" style={{ margin: 0 }}>
+            <span className="small muted">
               Missions cost model time, so only managers and owners can start one. You can read every
               mission and its report.
-            </p>
+            </span>
           ) : null}
 
           {error ? <ErrorNote message={error} /> : null}
@@ -178,7 +179,7 @@ export function MissionControl() {
 
         <div className="grid grid--2">
           <div className="card stack">
-            <h2 className="report__heading">How should it run?</h2>
+            <h2 className="report__heading">Run mode</h2>
             <div className="tabs" role="tablist" aria-label="Mission mode">
               {MODES.map((option) => (
                 <button
@@ -194,11 +195,12 @@ export function MissionControl() {
                 </button>
               ))}
             </div>
-            <p className="small muted" style={{ margin: 0 }}>{chosenMode?.body}</p>
+            <span className="small muted">{chosenMode?.body}</span>
           </div>
 
           <div className="card stack">
-            <h2 className="report__heading">Context (optional)</h2>
+            <h2 className="report__heading">Context</h2>
+            <span className="launch__hint">Optional.</span>
             <div className="grid grid--2">
               <label className="field">
                 <span className="field__label">Geography</span>
@@ -215,10 +217,9 @@ export function MissionControl() {
                 <input
                   className="input mono"
                   value={currency}
-                  onChange={(event) => setCurrency(event.target.value)}
+                  onChange={(event) => setCurrency(event.target.value.toUpperCase())}
                   placeholder="EUR"
                   maxLength={3}
-                  style={{ textTransform: 'uppercase' }}
                   disabled={!mayStart}
                 />
               </label>
@@ -237,7 +238,7 @@ export function MissionControl() {
               <span className="field__label">Constraints, one per line</span>
               <textarea
                 className="textarea"
-                style={{ minHeight: 72 }}
+                rows={3}
                 value={constraints}
                 onChange={(event) => setConstraints(event.target.value)}
                 placeholder={'Budget under €60,000\nMust open within 9 months'}
@@ -249,20 +250,20 @@ export function MissionControl() {
 
         <section className="stack">
           <div className="row row--between row--wrap">
-            <h2 className="report__heading">Who sails on this mission?</h2>
+            <h2 className="report__heading">Agents on this mission</h2>
             <span className="launch__hint">
               Core agents always run. Specialists are switched on for this mission only.
             </span>
           </div>
 
-          <div className="row row--wrap" style={{ gap: 6 }}>
+          <div className="row row--wrap">
             {core.map(({ definition, enabled }) => (
               <span
                 key={definition.id}
                 className={`pill ${enabled ? 'pill--brand' : 'pill--muted'}`}
                 title={enabled ? definition.summary : 'Switched off for this account on the Agents page.'}
               >
-                {definition.emoji} {definition.name}
+                {definition.name}
                 {enabled ? '' : ' · off'}
               </span>
             ))}
@@ -275,7 +276,9 @@ export function MissionControl() {
                 return (
                   <label key={definition.id} className={`agent-card ${on ? 'is-selected' : 'agent-card--off'}`}>
                     <span className="agent-card__head">
-                      <span className="agent-card__emoji" aria-hidden="true">{definition.emoji}</span>
+                      <span className="agent-card__emoji" aria-hidden="true">
+                        <AgentGlyph agent={definition.id} size={18} />
+                      </span>
                       <span className="grow">
                         <span className="agent-card__name">{definition.name}</span>
                         <span className="agent-card__role">
@@ -312,7 +315,7 @@ export function MissionControl() {
           <span className="launch__hint">
             {selected
               ? roster.agents.find((entry) => entry.definition.id === selected)?.definition.summary
-              : 'Tap a hut to read what that agent does.'}
+              : 'Select a station to read what that agent does.'}
           </span>
         </div>
         <Island

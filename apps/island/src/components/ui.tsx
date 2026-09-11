@@ -92,11 +92,19 @@ export const LABEL_TEXT: Record<Label, string> = {
   HIGH_RISK: 'High risk',
 };
 
+/**
+ * The recommendation, in words alone.
+ *
+ * The decision used to shout in capitals behind a coloured circle. It now says
+ * what it means once, in the same voice as the rest of the page; the colour
+ * that used to come from the emoji comes from the tone class the caller puts
+ * around it, which is the only thing on the page allowed to carry state.
+ */
 export const DECISION_LABEL: Record<Decision, string> = {
-  proceed: '🟢 PROCEED',
-  proceed_with_caution: '🟡 PROCEED WITH CAUTION',
-  more_research: '🟠 MORE RESEARCH REQUIRED',
-  do_not_proceed: '🔴 DO NOT PROCEED',
+  proceed: 'Proceed',
+  proceed_with_caution: 'Proceed with caution',
+  more_research: 'More research required',
+  do_not_proceed: 'Do not proceed',
 };
 
 /** Which `.verdict--*` modifier dresses each recommendation. */
@@ -105,6 +113,15 @@ export const DECISION_TONE: Record<Decision, string> = {
   proceed_with_caution: 'caution',
   more_research: 'research',
   do_not_proceed: 'stop',
+};
+
+/** The same four decisions where they appear at pill size, in a list or beside
+ *  a heading, rather than at the head of a report. */
+export const DECISION_PILL: Record<Decision, string> = {
+  proceed: 'pill--positive',
+  proceed_with_caution: 'pill--warning',
+  more_research: 'pill--info',
+  do_not_proceed: 'pill--negative',
 };
 
 const LABEL_TONE: Record<Label, string> = {
@@ -125,12 +142,98 @@ const MISSION_STATUS_TONE: Record<MissionStatus, string> = {
   aborted: 'pill--negative',
 };
 
+// --- marks ------------------------------------------------------------------
+
+/**
+ * The handful of marks the chrome itself needs.
+ *
+ * Agent iconography lives in `glyphs.tsx`; these belong to the application
+ * rather than to any agent. All of them are drawn to the same rules — a 24×24
+ * grid, `currentColor`, 1.6 stroke — so a mark inherits whatever colour the
+ * thing around it already decided on, and nothing here has to be an emoji.
+ */
+
+/** The product mark: a landmass and one contour ring, in the same cartographic
+ *  language the map is drawn in. */
+export function IslandMark({ size = 16 }: { size?: number }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      fill="currentColor"
+      aria-hidden="true"
+      focusable="false"
+    >
+      {/* A solid landmass with one station punched out of it. Drawn as fill
+          rather than stroke because at 16px a 1.6px outline of a soft shape
+          collapses into a grey ring and stops reading as anything at all. */}
+      <path
+        fillRule="evenodd"
+        clipRule="evenodd"
+        d="M12.2 3.2C16.7 3.2 20.8 6.1 20.8 10.4C20.8 15.7 16.5 20.8 11.4 20.8C6.8 20.8 3.2 17
+           3.2 12.4C3.2 7.1 7.5 3.2 12.2 3.2ZM12 9.1C10.4 9.1 9.1 10.4 9.1 12C9.1 13.6 10.4 14.9
+           12 14.9C13.6 14.9 14.9 13.6 14.9 12C14.9 10.4 13.6 9.1 12 9.1Z"
+      />
+    </svg>
+  );
+}
+
+/**
+ * The mark on a disclosure the reader is not allowed to skim past. It carries
+ * no colour of its own — the banner it sits in decides that.
+ *
+ * The one inline style in this file: every banner it sits in is a flex row, and
+ * a replaced element with no flex-basis of its own is squeezed by a long enough
+ * sentence beside it. That is the mark's own invariant, not a style choice.
+ */
+export function AlertMark({ size = 17 }: { size?: number }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.6}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+      style={{ flex: 'none' }}
+    >
+      <path d="M12 4.4L21 19.8H3Z" />
+      <path d="M12 10V13.9M12 16.7H12.01" />
+    </svg>
+  );
+}
+
+function CloseMark() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width={14}
+      height={14}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="M6.4 6.4L17.6 17.6M17.6 6.4L6.4 17.6" />
+    </svg>
+  );
+}
+
 // --- primitives -------------------------------------------------------------
 
 export function Loading({ rows = 3 }: { rows?: number }) {
   return (
     <div className="stack" aria-busy="true" aria-live="polite">
       {Array.from({ length: rows }, (_, index) => (
+        // The heights are the shape of the thing being waited for, not styling:
+        // a heading block over a run of rows.
         <div key={index} className="skeleton" style={{ height: index === 0 ? 88 : 64 }} />
       ))}
     </div>
@@ -141,7 +244,10 @@ export function ErrorNote({ message, onRetry }: { message: string; onRetry?: () 
   return (
     <div className="alert" role="alert">
       <div className="row row--between">
-        <span>{message}</span>
+        <span className="row">
+          <AlertMark size={16} />
+          <span>{message}</span>
+        </span>
         {onRetry ? (
           <button type="button" className="btn btn--sm btn--ghost" onClick={onRetry}>
             Try again
@@ -155,10 +261,12 @@ export function ErrorNote({ message, onRetry }: { message: string; onRetry?: () 
 export function Empty({ icon, title, body, action }: { icon: string; title: string; body?: string; action?: ReactNode }) {
   return (
     <div className="empty stack stack--sm">
-      <div className="empty__icon" aria-hidden="true">{icon}</div>
-      <p className="strong" style={{ margin: 0, color: 'var(--text)' }}>{title}</p>
-      {body ? <p className="small" style={{ margin: 0 }}>{body}</p> : null}
-      {action ? <div style={{ marginTop: 8 }}>{action}</div> : null}
+      {/* An empty state is typographic. The slot stays for a mark worth drawing;
+          it is simply not a place to park an emoji. */}
+      {icon ? <div className="empty__icon" aria-hidden="true">{icon}</div> : null}
+      <span className="strong">{title}</span>
+      {body ? <span className="small">{body}</span> : null}
+      {action ? <div>{action}</div> : null}
     </div>
   );
 }
@@ -190,11 +298,15 @@ export function Modal({
       }}
     >
       <div className={`modal ${wide ? 'modal--wide' : ''}`}>
-        <div className="row row--between" style={{ marginBottom: 16 }}>
-          <h2 style={{ margin: 0, fontSize: 17 }}>{title}</h2>
-          <button type="button" className="iconbutton" onClick={onClose} aria-label="Close">✕</button>
+        <div className="stack">
+          <div className="row row--between">
+            <h2 className="report__heading">{title}</h2>
+            <button type="button" className="iconbutton" onClick={onClose} aria-label="Close">
+              <CloseMark />
+            </button>
+          </div>
+          {children}
         </div>
-        {children}
       </div>
     </div>
   );
@@ -208,9 +320,7 @@ export function Stat({
       <span className="stat__label">{label}</span>
       <span className="stat__value">{value}</span>
       {note ? (
-        <span className="stat__note" style={tone ? { color: `var(--${tone})` } : undefined}>
-          {note}
-        </span>
+        <span className={`stat__note ${tone ? `stat__note--${tone}` : ''}`}>{note}</span>
       ) : null}
     </div>
   );
@@ -219,7 +329,10 @@ export function Stat({
 // --- island vocabulary ------------------------------------------------------
 
 /** The label a claim carries, emoji and all. `text` overrides the wording when
- *  the caller has something more specific to say than the label's own name. */
+ *  the caller has something more specific to say than the label's own name.
+ *
+ *  These four are the one place an emoji survives the redesign: the coloured
+ *  circle is the meaning rather than decoration around it. */
 export function LabelChip({ label, text }: { label: Label; text?: string }) {
   return (
     <span className={`chip chip--${LABEL_TONE[label]}`}>
@@ -251,6 +364,7 @@ export function ConfidenceMeter({
         aria-valuemax={100}
         aria-valuetext={`${percent} percent`}
       >
+        {/* Data, not dressing: the fill is the number it is reporting. */}
         <div className="meter__fill" style={{ width: `${percent}%` }} />
       </div>
       {note ? <span className="meter__note">{note}</span> : null}

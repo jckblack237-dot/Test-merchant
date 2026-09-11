@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { describeError, signIn, type SessionPayload } from '../lib/api';
-import { ErrorNote } from '../components/ui';
+import { ErrorNote, IslandMark } from '../components/ui';
 
 /** The island is a feature of the merchant account, so this is the CRM sign-in. */
 export function SignIn({ onSignedIn }: { onSignedIn: (session: SessionPayload) => void }) {
@@ -26,26 +26,20 @@ export function SignIn({ onSignedIn }: { onSignedIn: (session: SessionPayload) =
     <div className="auth-page">
       <div className="auth-card stack stack--lg">
         <div className="stack stack--sm center">
-          <span
-            className="app__mark"
-            style={{ width: 48, height: 48, fontSize: 24, margin: '0 auto' }}
-            aria-hidden="true"
-          >
-            🏝️
+          <span className="app__mark app__mark--lg" aria-hidden="true">
+            <IslandMark size={22} />
           </span>
-          <h1 style={{ margin: 0, fontSize: 22 }}>AI Agent Island</h1>
-          <p className="small muted" style={{ margin: 0 }}>
+          <span className="strong">AI Agent Island</span>
+          <span className="small muted">
             Give one task to an island of specialist agents. They research it, challenge each other,
             verify the claims, cost it out and hand back a report you can audit.
-          </p>
+          </span>
         </div>
 
         <form className="card stack" onSubmit={submit}>
-          <div>
-            <h2 style={{ margin: 0, fontSize: 17 }}>Sign in</h2>
-            <p className="small muted" style={{ margin: '4px 0 0' }}>
-              Use the same login as your LoyaltyLoop CRM.
-            </p>
+          <div className="stack stack--sm">
+            <h1 className="report__heading">Sign in</h1>
+            <span className="small muted">Use the same login as your LoyaltyLoop CRM.</span>
           </div>
 
           <label className="field">
