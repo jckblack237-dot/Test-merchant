@@ -8,6 +8,7 @@ import { authRouter } from './routes/auth';
 import { publicRouter } from './routes/public';
 import { customerRouter } from './routes/customer';
 import { merchantRouter } from './routes/merchant';
+import { islandRouter } from './routes/island';
 
 export function createApp() {
   const app = express();
@@ -55,6 +56,7 @@ export function createApp() {
   app.use('/api/auth', authRouter);
   app.use('/api/customer', customerRouter);
   app.use('/api/merchant', merchantRouter);
+  app.use('/api/island', islandRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

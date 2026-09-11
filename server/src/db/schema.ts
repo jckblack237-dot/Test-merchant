@@ -353,4 +353,193 @@ CREATE TABLE IF NOT EXISTS security_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_security_events_created ON security_events(created_at);
+
+-- ---------------------------------------------------------------------------
+-- AI Agent Island — multi-agent mission orchestration.
+--
+-- The roster (island_agents) is platform-global: agent prompts are product
+-- code, shared by every merchant, and carry no merchant_id. Everything a
+-- mission produces IS merchant-owned and is tenant scoped like the rest of the
+-- product — a mission asks questions about a business strategy, which is
+-- exactly the sort of thing one tenant must never read from another.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS island_agents (
+  agent_id            TEXT PRIMARY KEY,
+  name                TEXT NOT NULL,
+  emoji               TEXT NOT NULL DEFAULT '',
+  role                TEXT NOT NULL DEFAULT '',
+  summary             TEXT NOT NULL DEFAULT '',
+  stage               TEXT NOT NULL,
+  depends_on          TEXT NOT NULL DEFAULT '[]',
+  system_prompt       TEXT NOT NULL,
+  is_core             INTEGER NOT NULL DEFAULT 1,
+  web_search          INTEGER NOT NULL DEFAULT 0,
+  enabled_by_default  INTEGER NOT NULL DEFAULT 1,
+  active              INTEGER NOT NULL DEFAULT 1,
+  map_x               REAL NOT NULL DEFAULT 50,
+  map_y               REAL NOT NULL DEFAULT 50,
+  sort_order          INTEGER NOT NULL DEFAULT 0,
+  updated_at          TEXT NOT NULL
+);
+
+-- Per-merchant on/off switches for the roster (§9). Only overrides are stored;
+-- an agent with no row here uses its enabled_by_default.
+CREATE TABLE IF NOT EXISTS island_agent_settings (
+  id                  TEXT PRIMARY KEY,
+  merchant_id         TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+  agent_id            TEXT NOT NULL REFERENCES island_agents(agent_id) ON DELETE CASCADE,
+  enabled             INTEGER NOT NULL DEFAULT 1,
+  updated_at          TEXT NOT NULL,
+  UNIQUE (merchant_id, agent_id)
+);
+
+CREATE TABLE IF NOT EXISTS island_missions (
+  id                  TEXT PRIMARY KEY,
+  merchant_id         TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+  reference           TEXT NOT NULL,
+  user_task           TEXT NOT NULL,
+  objective           TEXT NOT NULL DEFAULT '',
+  geography           TEXT NOT NULL DEFAULT '',
+  language            TEXT NOT NULL DEFAULT 'English',
+  currency            TEXT NOT NULL DEFAULT 'USD',
+  constraints         TEXT NOT NULL DEFAULT '[]',
+  user_requirements   TEXT NOT NULL DEFAULT '[]',
+  status              TEXT NOT NULL DEFAULT 'created'
+                        CHECK (status IN ('created','planning','running','awaiting_approval',
+                                          'paused','completed','failed','aborted')),
+  mode                TEXT NOT NULL DEFAULT 'auto' CHECK (mode IN ('auto','approval')),
+  -- Which engine produced the outputs. A report from the simulation engine is
+  -- never allowed to look like one backed by a live model and real sources.
+  engine              TEXT NOT NULL DEFAULT 'simulation' CHECK (engine IN ('claude','simulation')),
+  enabled_agents      TEXT NOT NULL DEFAULT '[]',
+  current_stage       TEXT,
+  pending_stage       TEXT,
+  decision            TEXT CHECK (decision IN ('proceed','proceed_with_caution','more_research','do_not_proceed')),
+  confidence          REAL,
+  final_report        TEXT,
+  error               TEXT,
+  created_by          TEXT REFERENCES merchant_users(id) ON DELETE SET NULL,
+  created_by_name     TEXT NOT NULL DEFAULT '',
+  created_at          TEXT NOT NULL,
+  started_at          TEXT,
+  completed_at        TEXT,
+  UNIQUE (merchant_id, reference)
+);
+
+CREATE INDEX IF NOT EXISTS idx_island_missions_merchant ON island_missions(merchant_id, created_at);
+
+-- Every execution of every agent, never overwritten (§21 rule 3). A retry and
+-- a correction round are separate rows, so the whole history is auditable.
+CREATE TABLE IF NOT EXISTS island_agent_runs (
+  id                  TEXT PRIMARY KEY,
+  merchant_id         TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+  mission_id          TEXT NOT NULL REFERENCES island_missions(id) ON DELETE CASCADE,
+  agent_id            TEXT NOT NULL,
+  attempt             INTEGER NOT NULL DEFAULT 1,
+  round               INTEGER NOT NULL DEFAULT 0,
+  status              TEXT NOT NULL DEFAULT 'working',
+  input               TEXT NOT NULL DEFAULT '{}',
+  output              TEXT,
+  notes               TEXT,
+  error               TEXT,
+  confidence          REAL,
+  input_tokens        INTEGER,
+  output_tokens       INTEGER,
+  duration_ms         INTEGER,
+  started_at          TEXT NOT NULL,
+  completed_at        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_island_runs_mission ON island_agent_runs(mission_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_island_runs_merchant ON island_agent_runs(merchant_id, started_at);
+
+CREATE TABLE IF NOT EXISTS island_sources (
+  id                  TEXT PRIMARY KEY,
+  merchant_id         TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+  mission_id          TEXT NOT NULL REFERENCES island_missions(id) ON DELETE CASCADE,
+  run_id              TEXT,
+  agent_id            TEXT NOT NULL,
+  source_ref          TEXT NOT NULL,
+  title               TEXT NOT NULL DEFAULT '',
+  url                 TEXT NOT NULL DEFAULT '',
+  source_type         TEXT NOT NULL DEFAULT 'other',
+  reliability         TEXT NOT NULL DEFAULT 'medium',
+  created_at          TEXT NOT NULL,
+  UNIQUE (mission_id, source_ref)
+);
+
+CREATE INDEX IF NOT EXISTS idx_island_sources_merchant ON island_sources(merchant_id, mission_id);
+
+CREATE TABLE IF NOT EXISTS island_verifications (
+  id                  TEXT PRIMARY KEY,
+  merchant_id         TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+  mission_id          TEXT NOT NULL REFERENCES island_missions(id) ON DELETE CASCADE,
+  finding_id          TEXT NOT NULL DEFAULT '',
+  agent_id            TEXT NOT NULL DEFAULT '',
+  status              TEXT NOT NULL
+                        CHECK (status IN ('verified','needs_verification','contradiction','high_risk')),
+  reason              TEXT NOT NULL DEFAULT '',
+  severity            TEXT NOT NULL DEFAULT 'medium' CHECK (severity IN ('low','medium','high')),
+  recommended_action  TEXT NOT NULL DEFAULT '',
+  corrected_value     TEXT NOT NULL DEFAULT '',
+  resolved            INTEGER NOT NULL DEFAULT 0,
+  round               INTEGER NOT NULL DEFAULT 1,
+  created_at          TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_island_verifications_mission ON island_verifications(mission_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_island_verifications_merchant ON island_verifications(merchant_id, mission_id);
+
+-- The audit trail behind "no silent corrections" (§21 rule 4): what a claim
+-- said, what it says now, who changed it and why.
+CREATE TABLE IF NOT EXISTS island_corrections (
+  id                  TEXT PRIMARY KEY,
+  merchant_id         TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+  mission_id          TEXT NOT NULL REFERENCES island_missions(id) ON DELETE CASCADE,
+  finding_id          TEXT NOT NULL DEFAULT '',
+  from_agent          TEXT NOT NULL DEFAULT '',
+  to_agent            TEXT NOT NULL DEFAULT '',
+  original_claim      TEXT NOT NULL DEFAULT '',
+  corrected_claim     TEXT NOT NULL DEFAULT '',
+  reason              TEXT NOT NULL DEFAULT '',
+  severity            TEXT NOT NULL DEFAULT 'medium' CHECK (severity IN ('low','medium','high')),
+  round               INTEGER NOT NULL DEFAULT 1,
+  resolved            INTEGER NOT NULL DEFAULT 0,
+  created_at          TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_island_corrections_mission ON island_corrections(mission_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_island_corrections_merchant ON island_corrections(merchant_id, mission_id);
+
+-- The mission timeline. The island animation is a rendering of this table, and
+-- a client that reconnects replays from its last seq rather than losing history.
+CREATE TABLE IF NOT EXISTS island_events (
+  id                  TEXT PRIMARY KEY,
+  merchant_id         TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+  mission_id          TEXT NOT NULL REFERENCES island_missions(id) ON DELETE CASCADE,
+  seq                 INTEGER NOT NULL,
+  type                TEXT NOT NULL,
+  agent_id            TEXT,
+  message             TEXT NOT NULL DEFAULT '',
+  payload             TEXT NOT NULL DEFAULT '{}',
+  created_at          TEXT NOT NULL,
+  UNIQUE (mission_id, seq)
+);
+
+CREATE INDEX IF NOT EXISTS idx_island_events_merchant ON island_events(merchant_id, mission_id, seq);
+
+CREATE TABLE IF NOT EXISTS island_followups (
+  id                  TEXT PRIMARY KEY,
+  merchant_id         TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+  mission_id          TEXT NOT NULL REFERENCES island_missions(id) ON DELETE CASCADE,
+  question            TEXT NOT NULL,
+  answer              TEXT NOT NULL DEFAULT '',
+  status              TEXT NOT NULL DEFAULT 'answered',
+  asked_by            TEXT REFERENCES merchant_users(id) ON DELETE SET NULL,
+  created_at          TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_island_followups_mission ON island_followups(mission_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_island_followups_merchant ON island_followups(merchant_id, mission_id);
 `;

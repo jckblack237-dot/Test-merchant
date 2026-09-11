@@ -14,7 +14,9 @@ function randomBody(length: number): string {
 
 export type IdPrefix =
   | 'mch' | 'usr' | 'cus' | 'mem' | 'loc' | 'prd' | 'rwd'
-  | 'red' | 'txn' | 'tie' | 'cmp' | 'key' | 'aud' | 'sec' | 'rt' | 'adm';
+  | 'red' | 'txn' | 'tie' | 'cmp' | 'key' | 'aud' | 'sec' | 'rt' | 'adm'
+  // AI Agent Island
+  | 'msn' | 'run' | 'src' | 'vrf' | 'cor' | 'evt' | 'fup' | 'ias';
 
 /**
  * Ids are random rather than sequential on purpose: in a multi-tenant system a

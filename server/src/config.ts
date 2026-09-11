@@ -69,7 +69,10 @@ export const config = {
   refreshTokenTtlDays: intFromEnv('REFRESH_TOKEN_TTL_DAYS', 30),
   trialDays: intFromEnv('TRIAL_DAYS', 14),
   bcryptRounds: intFromEnv('BCRYPT_ROUNDS', nodeEnv === 'test' ? 4 : 12),
-  corsOrigins: (process.env.CORS_ORIGINS ?? 'http://localhost:5173,http://localhost:5174')
+  corsOrigins: (
+    process.env.CORS_ORIGINS ??
+    'http://localhost:5173,http://localhost:5174,http://localhost:5175'
+  )
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean),

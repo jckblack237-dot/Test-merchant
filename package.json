@@ -2,24 +2,26 @@
   "name": "loyaltyloop",
   "version": "1.0.0",
   "private": true,
-  "description": "LoyaltyLoop — multi-tenant customer retention & loyalty platform sold as a SaaS subscription",
+  "description": "LoyaltyLoop \u2014 multi-tenant customer retention & loyalty platform sold as a SaaS subscription",
   "workspaces": [
     "server",
     "apps/merchant",
-    "apps/customer"
+    "apps/customer",
+    "apps/island"
   ],
   "engines": {
     "node": ">=20.11"
   },
   "scripts": {
-    "dev": "npm run dev --workspace server & npm run dev --workspace apps/merchant & npm run dev --workspace apps/customer & wait",
+    "dev": "npm run dev --workspace server & npm run dev --workspace apps/merchant & npm run dev --workspace apps/customer & npm run dev --workspace apps/island & wait",
     "dev:server": "npm run dev --workspace server",
     "dev:merchant": "npm run dev --workspace apps/merchant",
     "dev:customer": "npm run dev --workspace apps/customer",
-    "build": "npm run build --workspace server && npm run build --workspace apps/merchant && npm run build --workspace apps/customer",
+    "build": "npm run build --workspace server && npm run build --workspace apps/merchant && npm run build --workspace apps/customer && npm run build --workspace apps/island",
     "start": "npm run start --workspace server",
     "seed": "npm run seed --workspace server",
     "test": "npm run test --workspace server",
-    "typecheck": "npm run typecheck --workspace server && npm run typecheck --workspace apps/merchant && npm run typecheck --workspace apps/customer"
+    "typecheck": "npm run typecheck --workspace server && npm run typecheck --workspace apps/merchant && npm run typecheck --workspace apps/customer && npm run typecheck --workspace apps/island",
+    "dev:island": "npm run dev --workspace apps/island"
   }
 }

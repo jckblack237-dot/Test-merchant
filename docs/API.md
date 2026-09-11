@@ -132,6 +132,49 @@ so customers keep their history.
 
 ---
 
+## AI Agent Island
+
+Every path requires a signed-in merchant staff account. POS API keys are refused.
+Full architecture in [ISLAND.md](ISLAND.md).
+
+| Method | Path | Role | Purpose |
+|---|---|---|---|
+| `GET` | `/island/agents` | staff | The agent roster with their prompts, plus which engine is live. |
+| `PATCH` | `/island/agents/:agentId` | manager | Switch a specialist agent on or off. |
+| `GET` | `/island/missions?limit=&offset=&status=` | staff | Mission history. |
+| `POST` | `/island/missions` | manager | Create a mission and start it. Counts against `ISLAND_MISSIONS_PER_DAY`. |
+| `GET` | `/island/missions/:id` | staff | The mission with its runs, events, sources, verifications and corrections. |
+| `GET` | `/island/missions/:id/runs/:runId` | staff | One agent run, including the exact envelope it was given. |
+| `GET` | `/island/missions/:id/stream` | staff | Live events as SSE. Resume with `Last-Event-ID` or `?afterSeq=`. |
+| `GET` | `/island/missions/:id/report` | staff | The final report. `?format=markdown` for the readable version. |
+| `POST` | `/island/missions/:id/pause` · `/resume` · `/abort` | manager | Mission controls. |
+| `POST` | `/island/missions/:id/approve` | manager | Release an approval-mode gate. |
+| `POST` | `/island/missions/:id/followups` | staff | Ask a question about a finished mission. |
+| `DELETE` | `/island/missions/:id` | owner | Delete a finished mission. Refused while it is running. |
+
+Starting a mission:
+
+```bash
+curl -X POST http://localhost:4000/api/island/missions \
+  -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{
+    "task": "Find a business opportunity that is missing in the Maldives and determine whether it is worth building.",
+    "geography": "Maldives",
+    "currency": "MVR",
+    "mode": "auto"
+  }'
+```
+
+Then watch it work. Each event carries its sequence number as the SSE `id`, so a
+dropped connection resumes exactly where it left off:
+
+```bash
+curl -N http://localhost:4000/api/island/missions/$MISSION_ID/stream \
+  -H "authorization: Bearer $TOKEN"
+```
+
+---
+
 ## Connecting a point-of-sale system
 
 Create a key in the CRM under **Team & keys**, then use it as a bearer token.
