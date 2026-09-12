@@ -296,7 +296,12 @@ export const AGENTS: AgentDefinition[] = [
     role: 'Independent final review',
     summary: 'Re-reviews the whole mission independently and issues the final call.',
     stage: 'review',
-    dependsOn: ['strategy'],
+    // The gate as well as the strategy. The Chief writes the report's headline
+    // decision, its labels and its confidence, and depending on strategy alone
+    // meant it did all of that having never been shown what the verification
+    // agent flagged, contradicted or refused to pass. risk_verification already
+    // runs before strategy, so this adds a dependency without adding a wave.
+    dependsOn: ['strategy', 'risk_verification'],
     core: true,
     x: 94,
     y: 34,

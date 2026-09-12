@@ -1224,6 +1224,28 @@ function ReportView({
         </div>
       ) : null}
 
+      {report.integrity_notes.length > 0 ? (
+        <div className="sim-notice" role="alert">
+          <AlertMark />
+          <div className="stack stack--sm">
+            <strong>
+              This report had to overrule its own agents in{' '}
+              {report.integrity_notes.length === 1 ? 'one place' : `${report.integrity_notes.length} places`}.
+            </strong>
+            <span>
+              Each claim below was checked against what the mission actually recorded. Where the two
+              disagreed the record was used — and the disagreement is shown here rather than settled
+              out of sight.
+            </span>
+            <ul className="bullets">
+              {report.integrity_notes.map((note, index) => (
+                <li key={index}>{note}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      ) : null}
+
       <ReportSection title="1. Executive summary">
         <p className="prose">{report.executive_summary}</p>
       </ReportSection>

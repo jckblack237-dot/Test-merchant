@@ -465,6 +465,18 @@ export interface FinalReport {
   agent_summary: { agent: string; name: string; status: string; key_contribution: string }[];
   /** Set when no live model ran. The UI must surface this prominently. */
   simulation_notice: string;
+  /**
+   * Every place assembly had to overrule what an agent said, because the record
+   * did not support it — a citation to a source that was never registered, a
+   * VERIFIED label with nothing behind it, a tally that disagreed with the
+   * verification rows, a confidence above what the mission earned.
+   *
+   * This is printed in the report rather than applied quietly. A correction the
+   * reader cannot see is just a different agent's word for it, and the point of
+   * reconciling against the record is that the reader no longer has to take
+   * anyone's word.
+   */
+  integrity_notes: string[];
 }
 
 // ---------------------------------------------------------------------------

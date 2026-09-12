@@ -26,6 +26,8 @@ import {
   type MissionRecord,
   type Recommendation,
   type ReportKeyFinding,
+  type SourceRecord,
+  type VerificationRecord,
 } from './types';
 
 const DECISIONS = new Set<string>(['proceed', 'proceed_with_caution', 'more_research', 'do_not_proceed']);
@@ -322,6 +324,167 @@ function actionPlanFrom(chief: AgentOutput | undefined, strategy: AgentOutput | 
     .sort((a, b) => a.priority - b.priority);
 }
 
+// ---------------------------------------------------------------------------
+// Reconciliation (§8, §21.6) — the record outranks what an agent said about it
+// ---------------------------------------------------------------------------
+
+/**
+ * Everything below exists because of one asymmetry: an agent's output is a
+ * claim, and the database is a record. For most of this file the two agree and
+ * the distinction does not matter. Where they disagree, the record wins — and
+ * the disagreement is written into `integrity_notes` rather than resolved
+ * quietly, because a silent correction asks the reader to trust the assembler
+ * instead of the agent, which is the same bargain in a different coat.
+ *
+ * What made this necessary: the labels, the tallies and the headline confidence
+ * were all taken verbatim from the models that produced them. The rules they
+ * were supposed to follow existed only as sentences in their prompts, so a
+ * claim could be printed 🟢 VERIFIED at 95% citing "S001" in a report whose own
+ * source register was empty, and nothing in the system objected.
+ */
+
+/** A citation only counts if it names a source the mission actually registered. */
+function knownSourceIds(sources: SourceRecord[]): Set<string> {
+  return new Set(sources.map((source) => source.source_id).filter(Boolean));
+}
+
+/**
+ * Holds every headline finding to the evidence the mission actually has.
+ *
+ * A citation to an id that is in no register is dropped: it refers to nothing,
+ * and printing it lends a claim the look of support it does not have. A finding
+ * left with no surviving citation cannot be VERIFIED, whatever the model typed
+ * — VERIFIED means "a real source says this, and here it is", and there is now
+ * demonstrably no here.
+ */
+function reconcileKeyFindings(
+  findings: ReportKeyFinding[],
+  sources: SourceRecord[],
+  notes: string[],
+): ReportKeyFinding[] {
+  const known = knownSourceIds(sources);
+  return findings.map((finding) => {
+    const cited = finding.evidence.filter(Boolean);
+    const real = cited.filter((id) => known.has(id));
+    const invented = cited.filter((id) => !known.has(id));
+
+    if (invented.length > 0) {
+      notes.push(
+        `"${truncate(finding.finding)}" cited ${invented.join(', ')}, which ${
+          invented.length === 1 ? 'is not a source' : 'are not sources'
+        } this mission registered. ${
+          invented.length === 1 ? 'It has' : 'They have'
+        } been dropped from the citation.`,
+      );
+    }
+
+    let label = finding.label;
+    if (label === 'VERIFIED' && real.length === 0) {
+      label = 'NEEDS_VERIFICATION';
+      notes.push(
+        `"${truncate(finding.finding)}" was labelled VERIFIED with nothing cited that this mission ` +
+          'holds a source for, so it is shown as NEEDS_VERIFICATION.',
+      );
+    }
+
+    return { ...finding, evidence: real, label };
+  });
+}
+
+/**
+ * The verification tallies, counted from the verification rows.
+ *
+ * These were previously the verification agent's own summary of its own work —
+ * a number it typed about itself, printed as the mission's audit. The rows are
+ * what it actually filed, so a mission can no longer report "High-risk items: 0"
+ * over a stored, unresolved high-risk flag.
+ */
+function verificationFromRecord(
+  verifications: VerificationRecord[],
+  claimed: Record<string, unknown>,
+  notes: string[],
+): { total: number; verified: number; needsVerification: number; contradictions: number; highRisk: number } {
+  const counted = {
+    total: verifications.length,
+    verified: verifications.filter((record) => record.status === 'verified').length,
+    needsVerification: verifications.filter((record) => record.status === 'needs_verification').length,
+    contradictions: verifications.filter((record) => record.status === 'contradiction').length,
+    highRisk: verifications.filter((record) => record.status === 'high_risk' || record.severity === 'high')
+      .length,
+  };
+
+  // Only worth saying when the verifier's account of itself differs from what it
+  // filed. Agreement is the normal case and needs no note.
+  const stated: [string, number, number][] = [
+    ['claims reviewed', asNumber(claimed.total_claims_reviewed, counted.total), counted.total],
+    ['verified', asNumber(claimed.verified, counted.verified), counted.verified],
+    ['high-risk items', asNumber(claimed.high_risk_items, counted.highRisk), counted.highRisk],
+    ['contradictions', asNumber(claimed.contradictions, counted.contradictions), counted.contradictions],
+  ];
+  for (const [name, said, actual] of stated) {
+    if (Math.round(said) !== actual) {
+      notes.push(
+        `The verification agent reported ${Math.round(said)} ${name}; the verification record holds ` +
+          `${actual}. The figure shown is the one from the record.`,
+      );
+    }
+  }
+  return counted;
+}
+
+/**
+ * Caps the headline confidence at what the mission can support.
+ *
+ * The Chief AI's `overall_confidence` was printed exactly as typed, with nothing
+ * between the model's JSON and the top of the report — so a mission whose every
+ * agent reported 0.2, whose gate did not pass and whose source register was
+ * empty could still open with a bold 99%.
+ *
+ * Two ceilings, both derived from the record: a mission that sourced nothing
+ * cannot be highly confident, and no summary can be more certain than the most
+ * certain thing it is summarising.
+ */
+const UNSOURCED_CEILING = 0.6;
+
+function reconcileConfidence(
+  stated: number,
+  findings: ReportKeyFinding[],
+  sources: SourceRecord[],
+  gatePassed: boolean,
+  notes: string[],
+): number {
+  let ceiling = 1;
+  let because = '';
+
+  const best = findings.length ? Math.max(...findings.map((finding) => finding.confidence)) : 1;
+  if (findings.length && best < ceiling) {
+    ceiling = best;
+    because = 'no finding it rests on is held that confidently';
+  }
+
+  if (sources.length === 0 && UNSOURCED_CEILING < ceiling) {
+    ceiling = UNSOURCED_CEILING;
+    because = 'this mission registered no sources at all';
+  }
+
+  if (!gatePassed && UNSOURCED_CEILING < ceiling) {
+    ceiling = UNSOURCED_CEILING;
+    because = 'the verification gate did not pass';
+  }
+
+  if (stated <= ceiling) return stated;
+  notes.push(
+    `The overall confidence was given as ${percent(stated)}, but ${because}, so it is shown as ` +
+      `${percent(ceiling)}.`,
+  );
+  return ceiling;
+}
+
+/** Long claims read badly inside a note about them. */
+function truncate(value: string, limit = 80): string {
+  return value.length <= limit ? value : `${value.slice(0, limit - 1)}…`;
+}
+
 export function buildFinalReport(
   store: TenantStore,
   mission: MissionRecord,
@@ -348,6 +511,9 @@ export function buildFinalReport(
   const corrections = listCorrections(store, mission.id);
   const sources = listSources(store, mission.id);
 
+  // Filled in by the reconciliation below and printed in the report itself.
+  const integrityNotes: string[] = [];
+
   const verificationRuns = runs.filter(
     (run) => run.agentId === 'risk_verification' && run.status === 'completed',
   );
@@ -373,15 +539,26 @@ export function buildFinalReport(
     ...(verifier ? [] : [`${missing('risk_verification')} No claim here has been checked by anyone.`]),
   ]);
 
-  const majorRisks = unique(
-    chief
-      ? textList(chief.major_risks)
-      : [
-          ...(strategy ? textList(strategy.key_risks) : []),
-          ...(outputs.get('financial') ? textList(outputs.get('financial')?.financial_risks) : []),
-          ...unresolvedIssues.filter((issue) => issue.severity === 'high').map((issue) => issue.problem),
-        ],
-  );
+  // The chief's list AND what the agents actually filed. Taking only the
+  // chief's meant a chief that returned an empty list printed "No agent named a
+  // major risk" over the strategy and financial agents' risk lists, which were
+  // sitting in the database the whole time. A risk an agent raised is a risk the
+  // mission found, whether or not the summariser carried it forward.
+  const agentRisks = [
+    ...(strategy ? textList(strategy.key_risks) : []),
+    ...(outputs.get('financial') ? textList(outputs.get('financial')?.financial_risks) : []),
+    ...unresolvedIssues.filter((issue) => issue.severity === 'high').map((issue) => issue.problem),
+  ];
+  const chiefRisks = chief ? textList(chief.major_risks) : [];
+  const majorRisks = unique([...chiefRisks, ...agentRisks]);
+  const droppedByChief = agentRisks.filter((risk) => !chiefRisks.includes(risk));
+  if (chief && droppedByChief.length > 0) {
+    integrityNotes.push(
+      `The chief's summary left out ${plural(droppedByChief.length, 'risk')} that ` +
+        `${droppedByChief.length === 1 ? 'was' : 'were'} raised by another agent. ` +
+        `${droppedByChief.length === 1 ? 'It is' : 'They are'} listed above alongside its own.`,
+    );
+  }
 
   const completed = [...outputs.values()];
   const derivedConfidence = completed.length
@@ -426,6 +603,30 @@ export function buildFinalReport(
 
   const recommendation = recommendationFrom(chief, strategy);
 
+  // --- reconciliation ------------------------------------------------------
+  // Everything above this line is what the mission said about itself. These
+  // four lines are where the record gets to answer back.
+  const gatePassed = verifier?.verification_passed === true;
+  const counted = verificationFromRecord(verifications, verificationSummary, integrityNotes);
+  const reconciledFindings = reconcileKeyFindings(keyFindingsFrom(chief, outputs), sources, integrityNotes);
+  const reconciledConfidence = reconcileConfidence(
+    chief ? asNumber(chief.overall_confidence, derivedConfidence) : derivedConfidence,
+    reconciledFindings,
+    sources,
+    gatePassed,
+    integrityNotes,
+  );
+
+  // The gate cannot report itself as passed while its own record still holds
+  // unresolved flags. It said so about itself; the rows say otherwise.
+  if (gatePassed && unresolvedIssues.length > 0) {
+    integrityNotes.push(
+      `The verification agent reported the gate as passed, but ${plural(unresolvedIssues.length, 'issue')} ` +
+        `${unresolvedIssues.length === 1 ? 'is' : 'are'} still unresolved in the verification record. ` +
+        'They are listed under unresolved issues below.',
+    );
+  }
+
   return {
     mission_id: mission.id,
     mission_reference: mission.reference,
@@ -433,7 +634,7 @@ export function buildFinalReport(
     engine: mission.engine,
     original_task: mission.userTask,
     executive_summary: chief ? asText(chief.executive_summary) || missing('chief_ai') : missing('chief_ai'),
-    key_findings: keyFindingsFrom(chief, outputs),
+    key_findings: reconciledFindings,
     research_summary: researchSummary(outputs.get('research')),
     competitor_summary: competitorSummary(outputs.get('competitor')),
     market_summary: marketSummary(outputs.get('market_analysis')),
@@ -441,13 +642,13 @@ export function buildFinalReport(
     financial_summary: financialSummaryFrom(chief, outputs.get('financial'), mission.currency),
     major_risks: majorRisks,
     verification: {
-      total_claims_reviewed: Math.round(asNumber(verificationSummary.total_claims_reviewed, 0)),
-      verified: Math.round(asNumber(verificationSummary.verified, 0)),
-      needs_verification: Math.round(asNumber(verificationSummary.needs_verification, 0)),
-      contradictions: Math.round(asNumber(verificationSummary.contradictions, 0)),
-      high_risk_items: Math.round(asNumber(verificationSummary.high_risk_items, 0)),
+      total_claims_reviewed: counted.total,
+      verified: counted.verified,
+      needs_verification: counted.needsVerification,
+      contradictions: counted.contradictions,
+      high_risk_items: counted.highRisk,
       rounds_used: verificationRuns.length,
-      passed: verifier?.verification_passed === true,
+      passed: gatePassed,
     },
     strategy_summary: strategySummary(strategy),
     recommendation,
@@ -457,7 +658,7 @@ export function buildFinalReport(
     unresolved_issues: unresolvedIssues,
     corrections,
     sources,
-    overall_confidence: chief ? asNumber(chief.overall_confidence, derivedConfidence) : derivedConfidence,
+    overall_confidence: reconciledConfidence,
     confidence_explanation: chief
       ? asText(chief.confidence_explanation) ||
         'The chief_ai agent gave no explanation for its confidence figure.'
@@ -465,6 +666,7 @@ export function buildFinalReport(
         'reported in its own work, which is a weaker number than a reviewed one.',
     agent_summary: agentSummary,
     simulation_notice: mission.engine === 'simulation' ? SIMULATION_NOTICE : '',
+    integrity_notes: integrityNotes,
   };
 }
 
@@ -512,6 +714,23 @@ export function reportToMarkdown(report: FinalReport): string {
       report.confidence_explanation,
     ].join('\n'),
   );
+
+  // Directly under the headline number, because that is the figure most likely
+  // to have been corrected and the worst one to correct quietly. A reader who
+  // sees 60% is entitled to know it was typed as 99%.
+  if (report.integrity_notes.length) {
+    blocks.push(
+      [
+        '## What this report had to correct',
+        '',
+        'Assembly checks what each agent claimed against what the mission actually recorded. Where the',
+        'two disagreed, the record was used and the disagreement is listed here rather than settled out',
+        'of sight.',
+        '',
+        report.integrity_notes.map((note) => `- ${note}`).join('\n'),
+      ].join('\n'),
+    );
+  }
 
   blocks.push(`## Executive summary\n\n${report.executive_summary}`);
 

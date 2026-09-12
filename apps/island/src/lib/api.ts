@@ -468,6 +468,8 @@ export interface FinalReport {
   confidence_explanation: string;
   agent_summary: { agent: string; name: string; status: string; key_contribution: string }[];
   simulation_notice: string;
+  /** Where assembly overruled an agent because the record did not back it. */
+  integrity_notes: string[];
 }
 
 export interface Followup {

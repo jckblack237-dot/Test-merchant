@@ -510,6 +510,11 @@ function registerOrigins(ctx: MissionContext, agentId: string, output: AgentOutp
  * timeline says so, because a silent clamp would be its own kind of dishonesty.
  */
 function clampRestatedConfidence(ctx: MissionContext, agentId: string, output: AgentOutput): void {
+  const registered = new Set(
+    listSources(ctx.store, ctx.mission.id)
+      .map((source) => source.source_id.toLowerCase())
+      .filter(Boolean),
+  );
   for (const finding of output.findings) {
     const originId = ctx.origins.has(finding.finding_id)
       ? finding.finding_id
@@ -518,9 +523,18 @@ function clampRestatedConfidence(ctx: MissionContext, agentId: string, output: A
     if (!origin || origin.agentId === agentId) continue;
     if (finding.confidence <= origin.confidence) continue;
 
+    // "New evidence" has to mean a source the mission actually holds. Keying on
+    // novelty alone made the rule trivially payable: one invented source id the
+    // origin had not happened to use was a novel string, and bought the whole
+    // confidence rise. So a citation only counts here if it names something in
+    // the register, or carries a URL an agent really opened.
     const fresh = finding.evidence
-      .map(evidenceKey)
-      .filter((key) => key && !origin.evidence.has(key));
+      .map((evidence) => ({ key: evidenceKey(evidence), evidence }))
+      .filter(({ key }) => key && !origin.evidence.has(key))
+      .filter(({ key, evidence }) => {
+        if (key.startsWith('url:')) return true;
+        return registered.has(asText(evidence.source_id).toLowerCase());
+      });
     if (fresh.length > 0) continue;
 
     const raised = finding.confidence;
@@ -1422,6 +1436,14 @@ async function runCorrection(
     inputTokens: invocation.inputTokens,
     outputTokens: invocation.outputTokens,
   });
+
+  // Rule 6 applies to a correction round exactly as it applies to a first run,
+  // and it was not being applied here at all: mergeCorrection clamps the
+  // agent's own overall confidence, but every per-finding confidence inside the
+  // merged output went straight through. A correction round is the single most
+  // tempting place to restate someone else's unsourced claim at near-certainty,
+  // because the agent is already being asked to change its answer.
+  clampRestatedConfidence(ctx, definition.id, output);
 
   ctx.outputs.set(definition.id, output);
   ctx.sourcesByAgent.set(definition.id, [

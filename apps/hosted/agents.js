@@ -6012,7 +6012,8 @@ window.ISLAND_AGENTS = [
     "summary": "Re-reviews the whole mission independently and issues the final call.",
     "stage": "review",
     "dependsOn": [
-      "strategy"
+      "strategy",
+      "risk_verification"
     ],
     "core": true,
     "enabledByDefault": true,
