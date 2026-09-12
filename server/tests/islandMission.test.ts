@@ -1,7 +1,19 @@
 import type { Express } from 'express';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { setProvider } from '../src/island/provider';
+import { requireAgent } from '../src/island/agents/registry';
+import {
+  setMarketDataProvider,
+  type MarketDataProvider,
+  type PriceSeries,
+} from '../src/island/marketData';
+import { buildUserMessage, setProvider, SimulationProvider } from '../src/island/provider';
+import type {
+  AgentInvocation,
+  AgentInvocationResult,
+  AgentProvider,
+  MissionEnvelope,
+} from '../src/island/types';
 import { addStaff, auth, createMerchant, freshApp, type MerchantFixture } from './helpers';
 
 /**
@@ -19,13 +31,19 @@ let merchant: MerchantFixture;
 
 beforeEach(async () => {
   // No ANTHROPIC_API_KEY in the test environment, so the island runs on the
-  // simulation provider — the same orchestrator, no model calls.
+  // simulation provider — the same orchestrator, no model calls. No market data
+  // key either, so the price feed starts out as it does on a default install:
+  // absent.
   setProvider(null);
+  setMarketDataProvider(null);
   app = freshApp();
   merchant = await createMerchant(app);
 });
 
-afterEach(() => setProvider(null));
+afterEach(() => {
+  setProvider(null);
+  setMarketDataProvider(null);
+});
 
 async function startMission(body: Record<string, unknown> = {}) {
   const response = await request(app)
@@ -366,5 +384,275 @@ describe('what the island refuses to do', () => {
     // A merchant is entitled to read the instructions an agent is given before
     // it goes and acts on their question.
     expect(agents.every((entry) => (entry.definition.systemPrompt ?? '').length > 200)).toBe(true);
+  });
+});
+
+/**
+ * The price feed, and who is allowed to see it.
+ *
+ * These missions ask for the forex desk by name, because it is off by default.
+ * What is being proved is narrow and worth proving: prices reach exactly one
+ * agent's envelope, a mission with no feed still finishes and says it had none,
+ * and either way the timeline records which of the two happened. An agent that
+ * quietly received prices, or quietly did not, would be the one failure this
+ * product cannot recover from.
+ */
+const FOREX_ROSTER = [
+  'task_manager',
+  'market_context',
+  'technical_analysis',
+  'risk_verification',
+  'chief_ai',
+];
+
+const TEST_CANDLES = [
+  { time: '2026-09-09T00:00:00Z', open: 1.1712, high: 1.1748, low: 1.1699, close: 1.1735 },
+  { time: '2026-09-10T00:00:00Z', open: 1.1735, high: 1.1761, low: 1.1708, close: 1.1714 },
+  { time: '2026-09-11T00:00:00Z', open: 1.1714, high: 1.1729, low: 1.1663, close: 1.1681 },
+];
+
+interface TimelineEvent {
+  agentId: string | null;
+  message: string;
+  payload: Record<string, unknown>;
+}
+
+interface FetchCall {
+  symbol: string;
+  interval: string;
+  limit: number;
+}
+
+/** A feed that answers instantly and records what it was asked for, so the test
+ *  can check the pair the orchestrator resolved rather than guess at it. */
+function testFeed(calls: FetchCall[]): MarketDataProvider {
+  return {
+    id: 'test_feed',
+    label: 'Test feed',
+    async fetchSeries(symbol, interval, limit) {
+      calls.push({ symbol, interval, limit });
+      return {
+        symbol,
+        interval,
+        candles: TEST_CANDLES,
+        provider: 'Test feed',
+        fetchedAt: '2026-09-12T06:00:00Z',
+      };
+    },
+  };
+}
+
+/**
+ * The simulation's Task Manager plans the core roster and nothing else, so its
+ * plan narrows a forex mission back off the desk before it ever reaches it.
+ * This wrapper puts the mission's own roster into that plan and changes nothing
+ * else: every agent still answers from the simulation, with no model and no
+ * research behind it.
+ */
+class ForexDeskPlanner implements AgentProvider {
+  readonly kind = 'simulation' as const;
+  readonly label = 'Simulation — no model, no web access';
+
+  private readonly inner = new SimulationProvider();
+
+  async run(invocation: AgentInvocation): Promise<AgentInvocationResult> {
+    const result = await this.inner.run(invocation);
+    if (invocation.definition.id !== 'task_manager') return result;
+    return {
+      ...result,
+      output: {
+        ...result.output,
+        required_agents: FOREX_ROSTER.map((agentId) => ({
+          agent_id: agentId,
+          reason: 'Named by the mission that was started.',
+          required: true,
+        })),
+        execution_order: [...FOREX_ROSTER],
+      },
+    };
+  }
+}
+
+function startForexMission(body: Record<string, unknown> = {}) {
+  setProvider(new ForexDeskPlanner());
+  return startMission({
+    task: 'Give me a read on EUR/USD ahead of the next ECB meeting, and say what would prove it wrong.',
+    agents: FOREX_ROSTER,
+    ...body,
+  });
+}
+
+async function envelopeOf(missionId: string, runId: string) {
+  const response = await request(app)
+    .get(`/api/island/missions/${missionId}/runs/${runId}`)
+    .set(auth(merchant.ownerToken))
+    .expect(200);
+  return response.body.run.input as MissionEnvelope;
+}
+
+describe('prices, and the agents that do not get them', () => {
+  it('gives market_data to the agent that asked for it and to nobody else', async () => {
+    const calls: FetchCall[] = [];
+    setMarketDataProvider(testFeed(calls));
+
+    const mission = await startForexMission();
+    const detail = await waitForStatus(mission.id, ['completed']);
+    const runs = detail.runs as { id: string; agentId: string; status: string }[];
+
+    // The pair came out of the mission, normalised, and the window came out of
+    // the island's own configuration. Once, however many rounds the agent ran:
+    // a fetch is somebody's rate limit and somebody's money.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.symbol).toBe('EUR/USD');
+    expect(calls[0]!.interval).toBe('1day');
+    expect(calls[0]!.limit).toBe(120);
+
+    let sawTechnical = false;
+    for (const run of runs) {
+      const envelope = await envelopeOf(mission.id, run.id);
+      if (run.agentId === 'technical_analysis') {
+        sawTechnical = true;
+        expect(envelope.market_data?.symbol).toBe('EUR/USD');
+        expect(envelope.market_data?.candles.length).toBe(TEST_CANDLES.length);
+      } else {
+        expect(envelope.market_data, `${run.agentId} was handed prices it never asked for`).toBeUndefined();
+      }
+    }
+    expect(sawTechnical).toBe(true);
+  }, 40_000);
+
+  it('records the fetch in the source register and in the timeline', async () => {
+    setMarketDataProvider(testFeed([]));
+
+    const mission = await startForexMission();
+    const detail = await waitForStatus(mission.id, ['completed']);
+
+    // A price that shaped a thesis has to be traceable like any other evidence:
+    // provider, symbol, interval and the time it was retrieved.
+    const sources = detail.sources as { title: string; source_type: string }[];
+    // One entry however many times the agent ran: a correction round re-reads
+    // the same candles, it does not acquire them again.
+    const priceSources = sources.filter((source) => source.title.includes('EUR/USD'));
+    expect(priceSources.length).toBe(1);
+    const priceSource = priceSources[0];
+    expect(priceSource).toBeDefined();
+    expect(priceSource!.title).toContain('1day');
+    expect(priceSource!.title).toContain('Test feed');
+    expect(priceSource!.title).toContain('2026-09-12T06:00:00Z');
+
+    const events = detail.events as TimelineEvent[];
+    const retrieved = events.find(
+      (event) => event.agentId === 'technical_analysis' && event.payload.market_data === true,
+    );
+    expect(retrieved).toBeDefined();
+    expect(retrieved!.payload.symbol).toBe('EUR/USD');
+    expect(retrieved!.payload.candles).toBe(TEST_CANDLES.length);
+    expect(retrieved!.payload.provider).toBe('Test feed');
+  }, 40_000);
+
+  it('finishes with no feed configured, and says in the timeline that there was none', async () => {
+    // No provider is the default state of an install, and it must stay a
+    // working one — quieter about the gap than it is today would be worse than
+    // failing outright.
+    const mission = await startForexMission();
+    const detail = await waitForStatus(mission.id, ['completed']);
+
+    const runs = detail.runs as { id: string; agentId: string; status: string }[];
+    const technical = runs.filter((run) => run.agentId === 'technical_analysis');
+    expect(technical.length).toBeGreaterThan(0);
+    expect(technical.some((run) => run.status === 'completed')).toBe(true);
+
+    for (const run of technical) {
+      const envelope = await envelopeOf(mission.id, run.id);
+      expect(envelope.market_data).toBeUndefined();
+    }
+
+    const events = detail.events as TimelineEvent[];
+    const gap = events.find(
+      (event) => event.agentId === 'technical_analysis' && event.payload.market_data === false,
+    );
+    expect(gap, 'a mission that fetched no prices must say so').toBeDefined();
+    expect(gap!.payload.reason).toBe('no_provider');
+    expect(gap!.payload.symbol).toBe('EUR/USD');
+    expect(gap!.message).toMatch(/no market data feed/i);
+
+    // Nothing was retrieved, so nothing may appear in the register.
+    expect(detail.sources).toEqual([]);
+  }, 40_000);
+
+  it('says there are no prices when the mission names no pair to fetch', async () => {
+    setMarketDataProvider(testFeed([]));
+
+    const mission = await startForexMission({
+      task: 'Tell me whether opening a second coffee shop in the north of the island is worth doing.',
+    });
+    const detail = await waitForStatus(mission.id, ['completed']);
+
+    const events = detail.events as TimelineEvent[];
+    const gap = events.find(
+      (event) => event.agentId === 'technical_analysis' && event.payload.market_data === false,
+    );
+    expect(gap).toBeDefined();
+    expect(gap!.payload.reason).toBe('no_pair');
+    expect(detail.sources).toEqual([]);
+  }, 40_000);
+});
+
+describe('what the price data looks like to the model', () => {
+  const series: PriceSeries = {
+    symbol: 'EUR/USD',
+    interval: '1day',
+    candles: TEST_CANDLES,
+    provider: 'Test feed',
+    fetchedAt: '2026-09-12T06:00:00Z',
+  };
+
+  function envelopeWith(marketData: PriceSeries | undefined): MissionEnvelope {
+    return {
+      mission_id: 'm_1',
+      mission_reference: 'MISSION-2026-001',
+      original_task: 'Give me a read on EUR/USD.',
+      objective: 'Read the structure on EUR/USD.',
+      user_requirements: [],
+      constraints: [],
+      geography: 'Germany',
+      language: 'English',
+      currency: 'EUR',
+      current_stage: 'analyse',
+      previous_agent: 'market_context',
+      previous_outputs: [],
+      handoffs: [],
+      research_questions: [],
+      available_sources: [],
+      ...(marketData ? { market_data: marketData } : {}),
+      instructions: '',
+    };
+  }
+
+  it('renders every candle it was given, unrounded', () => {
+    const message = buildUserMessage(requireAgent('technical_analysis'), envelopeWith(series));
+
+    expect(message).toContain('- Symbol: EUR/USD');
+    expect(message).toContain('- Interval: 1day');
+    expect(message).toContain('- Provider: Test feed');
+    expect(message).toContain('- Retrieved at: 2026-09-12T06:00:00Z');
+    expect(message).toContain('time,open,high,low,close');
+    for (const candle of TEST_CANDLES) {
+      expect(message).toContain(
+        `${candle.time.slice(0, 10)},${candle.open},${candle.high},${candle.low},${candle.close}`,
+      );
+    }
+  });
+
+  it('tells an agent that expected prices when there are none, and stays silent to everyone else', () => {
+    const technical = buildUserMessage(requireAgent('technical_analysis'), envelopeWith(undefined));
+    expect(technical).toContain('No price data reached this mission');
+    expect(technical).not.toContain('time,open,high,low,close');
+
+    // An agent that never asked for prices is told nothing about them either
+    // way: it has no price section to explain and no gap to fill.
+    const research = buildUserMessage(requireAgent('research'), envelopeWith(undefined));
+    expect(research).not.toContain('Live price data');
+    expect(research).not.toContain('No price data reached this mission');
   });
 });

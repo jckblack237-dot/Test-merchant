@@ -12,6 +12,7 @@
  * asked. The one exception is `previous_outputs`, which stays verbatim JSON:
  * the whole point of a dependency's output is that it arrives unedited.
  */
+import type { PriceSeries } from '../marketData';
 import type { AgentDefinition, Finding, Handoff, MissionEnvelope, SourceRecord } from '../types';
 
 /** The house rules, appended to every agent's own prompt. */
@@ -128,6 +129,88 @@ function renderHandoff(handoff: Handoff): string {
 }
 
 /**
+ * Enough rows that a window far wider than anything configured still arrives
+ * whole. It exists only so a misconfigured provider cannot bury the rest of the
+ * envelope, and when it fires the agent is told exactly what it is not seeing.
+ */
+const MAX_CANDLE_ROWS = 400;
+
+const DAILY_TIME = /^(\d{4}-\d{2}-\d{2})T00:00(:00)?(\.0+)?Z?$/;
+const MINUTE_TIME = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(:00)?(\.0+)?Z?$/;
+
+/**
+ * Shortens a timestamp only where the part being dropped is zero, so 120 daily
+ * candles do not spend a third of their width on "T00:00:00.000Z" each. A
+ * timestamp with anything in it is printed exactly as it arrived.
+ */
+function compactTime(time: string): string {
+  const daily = DAILY_TIME.exec(time);
+  if (daily?.[1]) return daily[1];
+  const minute = MINUTE_TIME.exec(time);
+  if (minute?.[1] && minute[2]) return `${minute[1]} ${minute[2]}`;
+  return time;
+}
+
+/**
+ * The candles, as a CSV table.
+ *
+ * Every candle that was fetched is listed: a window with holes in it produces
+ * levels nobody can check, and an agent asked to find support has to see the
+ * lows that formed it. Prices are printed exactly as the provider sent them —
+ * rounding a price on the way to an agent that may not invent one would be
+ * inventing one on its behalf.
+ */
+function renderMarketData(series: PriceSeries): string {
+  const rows = series.candles.map(
+    (candle) =>
+      `${compactTime(candle.time)},${candle.open},${candle.high},${candle.low},${candle.close}`,
+  );
+  const shown = rows.length > MAX_CANDLE_ROWS ? rows.slice(-MAX_CANDLE_ROWS) : rows;
+  const omitted = rows.length - shown.length;
+
+  const latest = series.candles[series.candles.length - 1];
+  const lines = [
+    `- Symbol: ${series.symbol}`,
+    `- Interval: ${series.interval}`,
+    `- Provider: ${series.provider}`,
+    `- Retrieved at: ${series.fetchedAt}`,
+    `- ${series.candles.length} candles, oldest first` +
+      (latest ? `, most recent close ${latest.close} at ${latest.time}` : ''),
+    '',
+    'This table is the whole of the price data you have. Every level you give, and every number you',
+    'write that is a price, must be one you can point at in these rows. Anything you cannot read off',
+    'them is unknown, and "unknown" is the answer. Prices are exactly as the feed sent them.',
+    '',
+    '```csv',
+    'time,open,high,low,close',
+    ...shown,
+    '```',
+  ];
+
+  if (omitted > 0) {
+    lines.push(
+      '',
+      `The ${omitted} oldest candles of this window are not shown here. You do not have them: do not ` +
+        'reason about the period they cover, and say so if the question needed it.',
+    );
+  }
+
+  return lines.join('\n');
+}
+
+/** What an agent that asked for prices is told when there are none. The reason
+ *  is in the mission timeline; what matters here is that it never reads as an
+ *  invitation to supply the numbers itself. */
+const NO_MARKET_DATA = [
+  'No price data reached this mission, so there are no prices in this envelope at all.',
+  '',
+  'This is the ordinary case, not a fault: the feed is optional, most missions name no pair, and a',
+  'fetch can fail. Report it as it is — no live prices, no levels, and every price field unknown.',
+  'Do not supply a number from memory or from an earlier agent to fill the gap: a price nobody',
+  'retrieved is one nobody can check, and someone may risk money against it.',
+].join('\n');
+
+/**
  * The user turn: everything this agent is allowed to know about the mission.
  *
  * Dependencies arrive in full because an agent that only sees a summary of the
@@ -172,6 +255,13 @@ export function buildUserMessage(definition: AgentDefinition, envelope: MissionE
       ].join('\n'),
     ),
   );
+
+  const market = envelope.market_data;
+  if (market) {
+    blocks.push(section('Live price data', renderMarketData(market)));
+  } else if (definition.needsMarketData) {
+    blocks.push(section('Live price data', NO_MARKET_DATA));
+  }
 
   if (envelope.research_questions.length) {
     blocks.push(

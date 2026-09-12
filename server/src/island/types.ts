@@ -12,6 +12,7 @@
  * made it all the way to the final report, and no later agent may raise a
  * confidence without attaching new evidence.
  */
+import type { PriceSeries } from './marketData';
 
 /** The four labels the whole system uses to grade a claim (never hide doubt). */
 export type Label = 'VERIFIED' | 'ESTIMATE' | 'NEEDS_VERIFICATION' | 'HIGH_RISK';
@@ -219,6 +220,9 @@ export interface MissionEnvelope {
   handoffs: Handoff[];
   research_questions: ResearchQuestion[];
   available_sources: SourceRecord[];
+  /** Real prices, when a feed is configured and the mission concerns a pair.
+   *  Absent means no feed — which the agent must report rather than paper over. */
+  market_data?: PriceSeries;
   /** Present only on a correction round. */
   correction?: CorrectionRequest;
   instructions: string;
@@ -241,6 +245,10 @@ export interface AgentDefinition {
   enabledByDefault: boolean;
   /** May this agent reach the live web? Only research-shaped agents may. */
   webSearch: boolean;
+  /** Should the orchestrator fetch prices for this agent before it runs? Set on
+   *  the one agent whose job is unanswerable without them; every other agent's
+   *  envelope stays free of prices it never asked to reason about. */
+  needsMarketData?: boolean;
   /** Agent to fall back to if this one fails repeatedly (§16). Usually none. */
   backupAgentId?: string;
   systemPrompt: string;

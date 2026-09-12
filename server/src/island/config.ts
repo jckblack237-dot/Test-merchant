@@ -47,6 +47,21 @@ export const islandConfig = {
   agentTimeoutMs: intFromEnv('ISLAND_AGENT_TIMEOUT_MS', 240_000, 1_000),
   missionsPerDay: intFromEnv('ISLAND_MISSIONS_PER_DAY', 25, 1),
   enabled: process.env.ISLAND_ENABLED !== 'false',
+  /**
+   * The price feed for the forex desk.
+   *
+   * No key is the normal state, not a misconfiguration: with none the island
+   * runs exactly as it does without a feed at all, and the Technical Analysis
+   * Agent reports having no prices rather than producing a level from memory.
+   */
+  marketData: {
+    provider: textFromEnv('MARKET_DATA_PROVIDER') ?? 'twelvedata',
+    apiKey: textFromEnv('MARKET_DATA_API_KEY'),
+    interval: textFromEnv('MARKET_DATA_INTERVAL') ?? '1day',
+    /** Candles per request: enough history to read structure, few enough that a
+     *  free-tier response stays small. */
+    candles: intFromEnv('MARKET_DATA_CANDLES', 120, 1),
+  },
 } as const;
 
 /**

@@ -69,6 +69,26 @@ export const config = {
   refreshTokenTtlDays: intFromEnv('REFRESH_TOKEN_TTL_DAYS', 30),
   trialDays: intFromEnv('TRIAL_DAYS', 14),
   bcryptRounds: intFromEnv('BCRYPT_ROUNDS', nodeEnv === 'test' ? 4 : 12),
+  /**
+   * A built frontend for this process to serve, for the single-container
+   * deployment. Unset in development, where Vite serves each app on its own
+   * port and proxies /api here.
+   *
+   * One app per process on purpose: three single-page apps on one origin would
+   * each need their own base path and router basename, which is a bigger change
+   * than a container image should force on the frontends.
+   */
+  publicDir: (() => {
+    const raw = process.env.PUBLIC_DIR?.trim();
+    if (!raw) return null;
+    const resolved = path.resolve(process.cwd(), raw);
+    if (!fs.existsSync(path.join(resolved, 'index.html'))) {
+      // A misspelled path would otherwise serve 404s that look like a routing
+      // bug in the app rather than a deployment mistake.
+      throw new Error(`PUBLIC_DIR "${resolved}" has no index.html in it.`);
+    }
+    return resolved;
+  })(),
   corsOrigins: (
     process.env.CORS_ORIGINS ??
     'http://localhost:5173,http://localhost:5174,http://localhost:5175'

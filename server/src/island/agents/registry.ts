@@ -32,6 +32,7 @@ interface AgentSpec {
   dependsOn: string[];
   core: boolean;
   webSearch?: boolean;
+  needsMarketData?: boolean;
   x: number;
   y: number;
 }
@@ -63,6 +64,7 @@ function define(spec: AgentSpec): AgentDefinition {
     // The nine core agents are the island as sold; specialists are opt-in (§9).
     enabledByDefault: spec.core,
     webSearch: spec.webSearch ?? false,
+    needsMarketData: spec.needsMarketData ?? false,
     systemPrompt: promptFor(spec.id),
     outputSchema: schemaFor(spec.id, spec.core),
     map: { x: spec.x, y: spec.y },
@@ -256,6 +258,10 @@ export const AGENTS: AgentDefinition[] = [
     stage: 'analyse',
     dependsOn: ['market_context'],
     core: false,
+    // The only agent that is handed prices. Its whole job is levels, and a
+    // level it did not read off a candle is a number someone may risk money
+    // against — so it gets the feed, and nobody else gets it by accident.
+    needsMarketData: true,
     x: 91,
     y: 17,
   }),

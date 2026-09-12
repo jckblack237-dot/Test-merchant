@@ -1,0 +1,61 @@
+# Fly.io — optional. One Machine, one volume, one SQLite file.
+#
+#   fly launch --no-deploy --copy-config        # claims the app name
+#   fly secrets set ACCESS_TOKEN_SECRET=… REFRESH_TOKEN_SECRET=… QR_TOKEN_SECRET=…
+#   fly deploy
+#
+# Every key below is from the fly.toml reference. Settings this file does not
+# name are left at Fly's own defaults on purpose — docs/DEPLOYMENT.md lists the
+# ones that were deliberately left out and why.
+
+app = 'loyaltyloop'
+primary_region = 'lhr'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[env]
+  NODE_ENV = 'production'
+  PORT = '4000'
+  DATABASE_PATH = '/data/loyaltyloop.sqlite'
+  # Which built frontend this process serves. The image carries all three;
+  # one per container, for the reason in docs/DEPLOYMENT.md.
+  PUBLIC_DIR = '/app/public/island'
+  # Must name the origins the browser actually loads the frontends from. Fly
+  # serves this app at <app>.fly.dev, so rename this with the app. An origin
+  # missing here fails every non-GET call with a 500 — see docs/DEPLOYMENT.md.
+  CORS_ORIGINS = 'https://loyaltyloop.fly.dev'
+  # A spending control, not a formality. Read the budget section of
+  # docs/DEPLOYMENT.md before raising it.
+  ISLAND_MISSIONS_PER_DAY = '5'
+
+[http_service]
+  internal_port = 4000
+  force_https = true
+  auto_start_machines = true
+  # A mission is background work that outlives the request which started it:
+  # a dozen-odd model calls over several minutes, watched over an SSE stream
+  # the browser may drop. A Machine stopped for idleness mid-mission comes back
+  # to reconcileInterruptedMissions() closing that mission out as interrupted,
+  # so idleness is not something this app may be stopped for.
+  auto_stop_machines = 'off'
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '20s'
+    method = 'get'
+    path = '/api/health'
+
+# A volume attaches to exactly one Machine, and this volume is the database.
+# Run this app at `fly scale count 1`: a second Machine is a second, divergent
+# database, not a second copy of this one.
+[[mounts]]
+  source = 'loyaltyloop_data'
+  destination = '/data'
+  initial_size = '3gb'
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '512mb'

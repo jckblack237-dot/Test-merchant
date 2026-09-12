@@ -1,0 +1,36 @@
+# The build context is sent to the daemon on every build, and anything that
+# lands in it can end up in a layer. Both halves of that matter here.
+
+# Host-installed dependencies and build output. A better-sqlite3 binding
+# compiled on the host will not load inside the image; the build makes its own.
+**/node_modules
+**/dist
+**/build
+**/*.tsbuildinfo
+**/.vite
+
+# The database. Copied into a layer it would ship as if it were the
+# deployment's own data, and the volume that should hold it would sit empty.
+data
+**/*.sqlite
+**/*.sqlite-journal
+**/*.sqlite-wal
+**/*.sqlite-shm
+
+# Secrets belong to the platform, never to an image anyone can pull and read.
+.env
+.env.*
+
+.git
+.gitignore
+.github
+**/coverage
+**/*.log
+**/.DS_Store
+
+# Not needed to build or to run the server.
+server/tests
+docs
+README.md
+fly.toml
+render.yaml

@@ -21,6 +21,7 @@ import { conflict } from '../lib/errors';
 import { nowIso } from '../lib/time';
 import { getAgent, planWaves, requireAgent } from './agents/registry';
 import { islandConfig } from './config';
+import { getMarketDataProvider, normalisePair, type PriceSeries } from './marketData';
 import { getProvider } from './provider';
 import { buildFinalReport } from './report';
 import { CORRECTION_SCHEMA } from './schemas';
@@ -231,6 +232,12 @@ interface MissionContext {
   sourcesByAgent: Map<string, SourceRecord[]>;
   origins: Map<string, FindingOrigin>;
   claimOrigins: Map<string, string>;
+  /** Prices fetched for the agents that asked for them, by agent id. */
+  marketData: Map<string, PriceSeries>;
+  /** Agents the fetch has already been attempted for. A retry, a backup agent
+   *  or a correction round re-reads the same candles rather than paying for a
+   *  second fetch and telling the timeline about it twice. */
+  marketAttempted: Set<string>;
   plan: MissionPlan;
   failed: Set<string>;
   selected: string[];
@@ -365,6 +372,7 @@ function buildEnvelope(
   ctx: MissionContext,
   definition: AgentDefinition,
   correction?: CorrectionRequest,
+  marketData?: PriceSeries,
 ): MissionEnvelope {
   const dependencies = definition.dependsOn
     .map((id) => ctx.outputs.get(id))
@@ -391,6 +399,10 @@ function buildEnvelope(
     handoffs,
     research_questions: ctx.plan.questions,
     available_sources: listSources(ctx.store, ctx.mission.id),
+    // Only ever set for the agent the prices were fetched for: an agent that
+    // did not ask for a feed must not find one in its envelope and start
+    // reasoning about numbers nobody sent it to check.
+    ...(marketData ? { market_data: marketData } : {}),
     ...(correction ? { correction } : {}),
     instructions: instructionsFor(ctx, definition),
   };
@@ -623,6 +635,166 @@ function recordChallenges(ctx: MissionContext, agentId: string, output: AgentOut
 }
 
 // ---------------------------------------------------------------------------
+// Market data: real prices, for the one agent that asked for them
+// ---------------------------------------------------------------------------
+
+/**
+ * Pulls a pair out of free text.
+ *
+ * `normalisePair` is the authority on what a pair is; this only has to hand it
+ * words worth trying. Written with a separator — "EUR/USD", "eur-usd" — a token
+ * is unambiguous and is taken in any case. Written as six run-together letters
+ * it is only taken when the text shouted it, because "market", "supply" and
+ * "profit" are all six letters and all split into two plausible-looking codes.
+ * Reading no pair costs a fetch that does not happen and an event saying so;
+ * reading the wrong one would send the mission to fetch an instrument nobody
+ * asked about.
+ */
+function pairFromText(text: string): string | null {
+  const tokens = text
+    .split(/\s+/)
+    .map((token) => token.replace(/^[^A-Za-z]+/, '').replace(/[^A-Za-z]+$/, ''))
+    .filter(Boolean);
+
+  const separated = tokens.filter((token) => /[/\-_.]/.test(token));
+  const joined = tokens.filter((token) => /^[A-Z]{6}$/.test(token));
+
+  for (const token of [...separated, ...joined]) {
+    const pair = normalisePair(token);
+    if (pair) return pair;
+  }
+  return null;
+}
+
+/** The Market Context Agent names the pair as a field of its own output, so
+ *  that is the reading to trust. The user's own words are the fallback for a
+ *  mission that ran without it, or where it could not name one. */
+function resolvePair(ctx: MissionContext): string | null {
+  const declared = asText(ctx.outputs.get('market_context')?.pair);
+  const named = declared ? normalisePair(declared) : null;
+  if (named) return named;
+  return pairFromText(ctx.mission.userTask);
+}
+
+/**
+ * Fetches the candles an agent's definition says it needs, once per mission.
+ *
+ * Every way this can end without prices is a normal outcome, not an error: no
+ * pair in the mission, no provider on the server, nothing the provider could
+ * serve. What none of them may be is quiet — each one writes the reason into
+ * the timeline, because an agent reporting "no price data" is only honest if
+ * the record says why there was none.
+ */
+async function resolveMarketData(
+  ctx: MissionContext,
+  definition: AgentDefinition,
+): Promise<PriceSeries | undefined> {
+  if (!definition.needsMarketData) return undefined;
+  if (ctx.marketAttempted.has(definition.id)) return ctx.marketData.get(definition.id);
+  ctx.marketAttempted.add(definition.id);
+
+  const noData = (message: string, payload: Record<string, unknown>): undefined => {
+    emit(ctx, 'log', message, { market_data: false, ...payload }, definition.id);
+    return undefined;
+  };
+
+  const pair = resolvePair(ctx);
+  if (!pair) {
+    return noData(
+      `No prices were fetched for ${definition.name}: this mission names no currency pair to fetch. ` +
+        'It runs with no price data and must report that rather than work from memory.',
+      { reason: 'no_pair' },
+    );
+  }
+
+  const provider = getMarketDataProvider();
+  if (!provider) {
+    return noData(
+      `No prices were fetched for ${pair}: this server has no market data feed configured. ` +
+        `${definition.name} runs with no price data and must report that rather than work from memory.`,
+      { reason: 'no_provider', symbol: pair },
+    );
+  }
+
+  const { interval, candles } = islandConfig.marketData;
+  let series: PriceSeries | null = null;
+  try {
+    series = await provider.fetchSeries(pair, interval, candles, ctx.handle.controller.signal);
+  } catch (error) {
+    // A provider is contracted to resolve null rather than throw, but one that
+    // breaks that promise degrades this agent, not the mission — except when
+    // the throw is the mission being aborted, which ends it here as anywhere.
+    ensureLive(ctx.handle);
+    const message = error instanceof Error ? error.message : String(error);
+    return noData(
+      `${provider.label} could not return ${pair} prices: ${message} ${definition.name} runs with no ` +
+        'price data and must report that rather than work from memory.',
+      { reason: 'fetch_failed', symbol: pair, provider: provider.id, error: message },
+    );
+  }
+
+  if (!series || series.candles.length === 0) {
+    return noData(
+      `${provider.label} returned no ${pair} prices at ${interval}. ${definition.name} runs with no ` +
+        'price data and must report that rather than work from memory.',
+      { reason: series ? 'empty_series' : 'no_series', symbol: pair, provider: provider.id },
+    );
+  }
+
+  ctx.marketData.set(definition.id, series);
+  emit(
+    ctx,
+    'log',
+    `Retrieved ${plural(series.candles.length, 'candle')} of ${series.symbol} ${series.interval} prices ` +
+      `from ${series.provider} for ${definition.name}.`,
+    {
+      market_data: true,
+      symbol: series.symbol,
+      interval: series.interval,
+      candles: series.candles.length,
+      provider: series.provider,
+      fetched_at: series.fetchedAt,
+    },
+    definition.id,
+  );
+  return series;
+}
+
+/**
+ * Puts the fetch in the mission's source register.
+ *
+ * A level that shaped a thesis has to trace back to a provider, a symbol, a
+ * window and a time, exactly like a page a research agent opened. There is no
+ * URL to record — the request carries the API key in its query string, and the
+ * response is not a document anyone can open again — so the register carries
+ * the whole provenance in the title. It de-duplicates by that title, which is
+ * why a retry or a correction round lands on the same ref instead of a second
+ * entry for the same candles.
+ */
+function registerMarketSource(
+  ctx: MissionContext,
+  runId: string,
+  agentId: string,
+  series: PriceSeries,
+): SourceRecord[] {
+  const first = series.candles[0]?.time ?? 'unknown';
+  const last = series.candles[series.candles.length - 1]?.time ?? 'unknown';
+  return recordSources(ctx.store, ctx.mission.id, runId, agentId, [
+    {
+      source_id: '',
+      title:
+        `${series.symbol} ${series.interval} price series — ${plural(series.candles.length, 'candle')}, ` +
+        `${first} to ${last}, retrieved from ${series.provider} at ${series.fetchedAt}`,
+      url: '',
+      source_type: 'other',
+      // Machine-retrieved straight from the feed, with no summarising step in
+      // between — the most directly traceable thing in the register.
+      reliability: 'high',
+    },
+  ]);
+}
+
+// ---------------------------------------------------------------------------
 // Running one agent (§4, §16)
 // ---------------------------------------------------------------------------
 
@@ -645,9 +817,13 @@ async function invokeAgent(
   round: number,
   correction?: CorrectionRequest,
 ): Promise<Invocation> {
-  const envelope = buildEnvelope(ctx, definition, correction);
+  // Fetched before the envelope is built, so the candles are part of the exact
+  // input this run is stored with and "why did it say that?" stays answerable.
+  const marketData = await resolveMarketData(ctx, definition);
+  const envelope = buildEnvelope(ctx, definition, correction, marketData);
   const schema = correction ? CORRECTION_SCHEMA(definition.id) : definition.outputSchema;
   const run = startRun(ctx.store, ctx.mission.id, definition.id, attempt, round, envelope);
+  const marketSources = marketData ? registerMarketSource(ctx, run.id, definition.id, marketData) : [];
 
   emit(
     ctx,
@@ -685,7 +861,9 @@ async function invokeAgent(
     return {
       runId: run.id,
       output,
-      sources,
+      // The feed counts among the sources this agent worked from, so it travels
+      // in the hand-off with everything else it read.
+      sources: [...marketSources, ...sources],
       notes: result.notes,
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
@@ -1373,6 +1551,8 @@ async function runMission(store: TenantStore, mission: MissionRecord, handle: Ac
     sourcesByAgent: new Map(),
     origins: new Map(),
     claimOrigins: new Map(),
+    marketData: new Map(),
+    marketAttempted: new Set(),
     plan: { objective: '', constraints: [], questions: [], agents: new Set(), reasons: new Map() },
     failed: new Set(),
     selected: [],
