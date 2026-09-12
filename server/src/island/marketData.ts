@@ -69,6 +69,43 @@ const SEPARATED_PAIR = /^([A-Z]{3,5})[\s/\-_.]+([A-Z]{3,5})$/;
 const JOINED_PAIR = /^([A-Z]{3})([A-Z]{3})$/;
 
 /**
+ * Every code either side of a pair is checked against.
+ *
+ * Shape alone is not enough to know a pair when you see one. "short-term" is
+ * two letter-runs around a separator, and so are "long-term", "risk-free",
+ * "top-down" and "buy-side" — all of which a shape-only reader takes out of an
+ * ordinary English sentence and sends to the feed as an instrument. The cost of
+ * that is not a wasted request: a mission that names EUR/USD gets told there
+ * were no prices for it, over a symbol nobody mentioned.
+ *
+ * A closed list has to be kept up, and a code missing from it reads as no pair
+ * at all — the same outcome as a mission that names none, which the timeline
+ * already explains. That is the safe direction to be wrong in.
+ */
+const KNOWN_CODES = new Set(
+  (
+    // ISO 4217 active codes.
+    'AED AFN ALL AMD ANG AOA ARS AUD AWG AZN BAM BBD BDT BGN BHD BIF BMD BND ' +
+    'BOB BOV BRL BSD BTN BWP BYN BZD CAD CDF CHE CHF CHW CLF CLP CNY COP COU ' +
+    'CRC CUP CVE CZK DJF DKK DOP DZD EGP ERN ETB EUR FJD FKP GBP GEL GHS GIP ' +
+    'GMD GNF GTQ GYD HKD HNL HTG HUF IDR ILS INR IQD IRR ISK JMD JOD JPY KES ' +
+    'KGS KHR KMF KPW KRW KWD KYD KZT LAK LBP LKR LRD LSL LYD MAD MDL MGA MKD ' +
+    'MMK MNT MOP MRU MUR MVR MWK MXN MXV MYR MZN NAD NGN NIO NOK NPR NZD OMR ' +
+    'PAB PEN PGK PHP PKR PLN PYG QAR RON RSD RUB RWF SAR SBD SCR SDG SEK SGD ' +
+    'SHP SLE SOS SRD SSP STN SVC SYP SZL THB TJS TMT TND TOP TRY TTD TWD TZS ' +
+    'UAH UGX USD UYI UYU UYW UZS VED VES VND VUV WST XAF XCD XCG XDR XOF XPF ' +
+    'YER ZAR ZMW ZWG ' +
+    // Offshore renminbi: quoted everywhere, not an ISO code.
+    'CNH ' +
+    // Metals, quoted against currencies exactly like a pair.
+    'XAU XAG XPT XPD ' +
+    // Crypto tickers in common quotation.
+    'BTC ETH XRP LTC BCH ADA SOL DOT DOGE MATIC LINK AVAX XLM TRX BNB USDT ' +
+    'USDC DAI SHIB UNI ATOM ETC XMR ALGO FIL NEAR APT ARB SUI TON PEPE'
+  ).split(' '),
+);
+
+/**
  * "eurusd", "EUR-USD", "eur/usd", "EUR USD" → "EUR/USD". Null when it is not a
  * pair.
  *
@@ -76,6 +113,12 @@ const JOINED_PAIR = /^([A-Z]{3})([A-Z]{3})$/;
  * because that is the one length two ISO 4217 codes can make. "EURUSDX" gets no
  * reading at all rather than a guessed one — and the pair may well have come
  * out of a model's JSON, so a non-string is refused too.
+ *
+ * This is shape only. A symbol handed over deliberately — by a caller, or by an
+ * agent filling in a field named `pair` — is the caller's to be right about, and
+ * a provider knows its own universe better than any list here does: an unknown
+ * code comes back as "no prices for that symbol", which is already an honest
+ * answer. Prose is the other case entirely; see `readPair`.
  */
 export function normalisePair(input: string): string | null {
   if (typeof input !== 'string') return null;
@@ -88,6 +131,27 @@ export function normalisePair(input: string): string | null {
   // from being sent to the API as though it were a real request.
   if (!base || !quote || base === quote) return null;
   return `${base}/${quote}`;
+}
+
+/**
+ * The same reading, for a word found in a sentence nobody wrote as a symbol.
+ *
+ * Here shape is necessary and nowhere near sufficient. "short-term" is two
+ * letter-runs around a separator, and so are "long-term", "risk-free",
+ * "top-down" and "buy-side" — so a shape-only reader pulls an instrument out of
+ * ordinary English, and a mission about EUR/USD gets told there were no prices,
+ * over a symbol nobody mentioned. Both sides must be codes somebody quotes.
+ *
+ * A code missing from that list reads as no pair at all, which is the same
+ * outcome as a mission naming none, and the timeline already explains it. That
+ * is the safe direction to be wrong in.
+ */
+export function readPair(word: string): string | null {
+  const pair = normalisePair(word);
+  if (!pair) return null;
+  const [base, quote] = pair.split('/');
+  if (!base || !quote) return null;
+  return KNOWN_CODES.has(base) && KNOWN_CODES.has(quote) ? pair : null;
 }
 
 // ---------------------------------------------------------------------------

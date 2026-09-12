@@ -37,13 +37,25 @@ interface AgentSpec {
   y: number;
 }
 
-/** A core agent without a hand-written schema is a build mistake, not something
- *  to paper over with the generic specialist shape at runtime. */
+/**
+ * The schema an agent actually runs on.
+ *
+ * A hand-written schema wins wherever one exists. `core` says whether an agent
+ * is on by default, which has nothing to do with whether anyone wrote it a
+ * contract: the forex desk is opt-in and has three of the most specific schemas
+ * in the file. Reading `core` here instead of the map is how those three came
+ * to be unreachable, with prompts describing fields the model was never offered
+ * and `stripUnknown` deleting them if it guessed right anyway.
+ *
+ * The generic specialist shape is the fallback for an agent nobody has written
+ * one for. A core agent without one is a build mistake rather than something to
+ * paper over at runtime.
+ */
 function schemaFor(id: string, core: boolean): JsonSchema {
-  if (!core) return SPECIALIST_SCHEMA(id);
   const schema = SCHEMAS_BY_AGENT[id];
-  if (!schema) throw new Error(`Core agent "${id}" has no entry in SCHEMAS_BY_AGENT.`);
-  return schema;
+  if (schema) return schema;
+  if (core) throw new Error(`Core agent "${id}" has no entry in SCHEMAS_BY_AGENT.`);
+  return SPECIALIST_SCHEMA(id);
 }
 
 function promptFor(id: string): string {

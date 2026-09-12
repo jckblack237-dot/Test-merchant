@@ -21,7 +21,7 @@ import { conflict } from '../lib/errors';
 import { nowIso } from '../lib/time';
 import { getAgent, planWaves, requireAgent } from './agents/registry';
 import { islandConfig } from './config';
-import { getMarketDataProvider, normalisePair, type PriceSeries } from './marketData';
+import { getMarketDataProvider, normalisePair, readPair, type PriceSeries } from './marketData';
 import { getProvider } from './provider';
 import { buildFinalReport } from './report';
 import { CORRECTION_SCHEMA } from './schemas';
@@ -639,41 +639,58 @@ function recordChallenges(ctx: MissionContext, agentId: string, output: AgentOut
 // ---------------------------------------------------------------------------
 
 /**
- * Pulls a pair out of free text.
+ * Pulls every pair out of free text, in the order they are mentioned.
  *
- * `normalisePair` is the authority on what a pair is; this only has to hand it
- * words worth trying. Written with a separator — "EUR/USD", "eur-usd" — a token
- * is unambiguous and is taken in any case. Written as six run-together letters
- * it is only taken when the text shouted it, because "market", "supply" and
- * "profit" are all six letters and all split into two plausible-looking codes.
+ * `readPair` is the authority on what a pair is in prose — including whether
+ * both sides are codes anyone quotes, which is what keeps "short-term" from
+ * being read as SHORT/TERM. This only has to hand it words worth trying.
+ * Written with a separator — "EUR/USD", "eur-usd" — a token is unambiguous and
+ * is taken in any case. Written as six run-together letters it is only taken
+ * when the text shouted it, because "market", "supply" and "profit" are all six
+ * letters and all split into two plausible-looking codes.
+ *
  * Reading no pair costs a fetch that does not happen and an event saying so;
  * reading the wrong one would send the mission to fetch an instrument nobody
  * asked about.
  */
-function pairFromText(text: string): string | null {
+function pairsFromText(text: string): string[] {
   const tokens = text
     .split(/\s+/)
     .map((token) => token.replace(/^[^A-Za-z]+/, '').replace(/[^A-Za-z]+$/, ''))
     .filter(Boolean);
 
-  const separated = tokens.filter((token) => /[/\-_.]/.test(token));
-  const joined = tokens.filter((token) => /^[A-Z]{6}$/.test(token));
-
-  for (const token of [...separated, ...joined]) {
-    const pair = normalisePair(token);
-    if (pair) return pair;
+  const found: string[] = [];
+  for (const token of tokens) {
+    const separated = /[/\-_.]/.test(token);
+    const joined = /^[A-Z]{6}$/.test(token);
+    if (!separated && !joined) continue;
+    const pair = readPair(token);
+    if (pair && !found.includes(pair)) found.push(pair);
   }
-  return null;
+  return found;
+}
+
+interface ResolvedPair {
+  pair: string;
+  /** Where the reading came from, for the timeline. */
+  from: 'market_context' | 'task';
+  /** Other pairs the task named and this fetch is not about. */
+  alsoNamed: string[];
 }
 
 /** The Market Context Agent names the pair as a field of its own output, so
  *  that is the reading to trust. The user's own words are the fallback for a
  *  mission that ran without it, or where it could not name one. */
-function resolvePair(ctx: MissionContext): string | null {
+function resolvePair(ctx: MissionContext): ResolvedPair | null {
+  const named = pairsFromText(ctx.mission.userTask);
   const declared = asText(ctx.outputs.get('market_context')?.pair);
-  const named = declared ? normalisePair(declared) : null;
-  if (named) return named;
-  return pairFromText(ctx.mission.userTask);
+  const fromContext = declared ? normalisePair(declared) : null;
+  if (fromContext) {
+    return { pair: fromContext, from: 'market_context', alsoNamed: named.filter((p) => p !== fromContext) };
+  }
+  const [first, ...rest] = named;
+  if (!first) return null;
+  return { pair: first, from: 'task', alsoNamed: rest };
 }
 
 /**
@@ -698,12 +715,28 @@ async function resolveMarketData(
     return undefined;
   };
 
-  const pair = resolvePair(ctx);
-  if (!pair) {
+  const resolved = resolvePair(ctx);
+  if (!resolved) {
     return noData(
       `No prices were fetched for ${definition.name}: this mission names no currency pair to fetch. ` +
         'It runs with no price data and must report that rather than work from memory.',
       { reason: 'no_pair' },
+    );
+  }
+  const { pair } = resolved;
+
+  // A task that names several pairs gets prices for one of them. Which one, and
+  // which were passed over, belongs on the record rather than in the difference
+  // between what the user asked and what the report quietly answers.
+  if (resolved.alsoNamed.length > 0) {
+    emit(
+      ctx,
+      'log',
+      `This mission names more than one pair. Prices are being fetched for ${pair}` +
+        `${resolved.from === 'market_context' ? ', the pair the Market Context Agent named' : ''}; ` +
+        `${resolved.alsoNamed.join(', ')} ${resolved.alsoNamed.length === 1 ? 'is' : 'are'} not fetched.`,
+      { market_data: false, reason: 'multiple_pairs', symbol: pair, also_named: resolved.alsoNamed },
+      definition.id,
     );
   }
 
@@ -773,7 +806,7 @@ async function resolveMarketData(
  */
 function registerMarketSource(
   ctx: MissionContext,
-  runId: string,
+  runId: string | null,
   agentId: string,
   series: PriceSeries,
 ): SourceRecord[] {
@@ -820,10 +853,21 @@ async function invokeAgent(
   // Fetched before the envelope is built, so the candles are part of the exact
   // input this run is stored with and "why did it say that?" stays answerable.
   const marketData = await resolveMarketData(ctx, definition);
+
+  // Registered before the envelope too, and for the same reason. The envelope's
+  // available_sources is a snapshot taken as it is built, and the envelope tells
+  // the agent not to cite an id that is not on that list — so registering the
+  // series afterwards left the one agent reading the candles unable to cite
+  // them, while the register listed them further down the same document.
+  //
+  // There is no run to attribute it to yet, because the run is opened with this
+  // envelope as its stored input. That costs nothing real: the series is fetched
+  // once per mission and shared, and the title carries the full provenance.
+  const marketSources = marketData ? registerMarketSource(ctx, null, definition.id, marketData) : [];
+
   const envelope = buildEnvelope(ctx, definition, correction, marketData);
   const schema = correction ? CORRECTION_SCHEMA(definition.id) : definition.outputSchema;
   const run = startRun(ctx.store, ctx.mission.id, definition.id, attempt, round, envelope);
-  const marketSources = marketData ? registerMarketSource(ctx, run.id, definition.id, marketData) : [];
 
   emit(
     ctx,

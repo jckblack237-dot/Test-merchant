@@ -654,7 +654,9 @@ function sourceRows(store: TenantStore, missionId: string): SourceRow[] {
 export function recordSources(
   store: TenantStore,
   missionId: string,
-  runId: string,
+  /** Null for a source that exists before any run does — the price series is
+   *  registered so it can appear in the envelope the run is opened with. */
+  runId: string | null,
   agentId: string,
   sources: SourceRecord[],
 ): SourceRecord[] {

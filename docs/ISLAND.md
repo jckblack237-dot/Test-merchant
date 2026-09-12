@@ -1,6 +1,6 @@
 # AI Agent Island
 
-One task in. An audited report out, produced by fourteen separate AI agents that
+One task in. An audited report out, produced by seventeen separate AI agents that
 research it, argue with each other, send failed work back, cost it out and then
 have a chief reviewer throw out whatever does not hold up.
 
@@ -43,7 +43,8 @@ Three mechanisms keep those labels honest rather than decorative:
 
 ## The roster
 
-Nine core agents always sail. Five specialists are switched on per merchant.
+Nine core agents always sail. Eight specialists are switched on per merchant —
+five general, plus a three-agent forex desk.
 
 | Agent | Stage | Waits for | Web |
 |---|---|---|---|
@@ -60,6 +61,9 @@ Nine core agents always sail. Five specialists are switched on per merchant.
 | 💰 Financial Agent | Financial | Risk & Verification | |
 | ⚙️ Operations Agent *(specialist)* | Financial | Risk & Verification | |
 | ♟️ Strategy Agent | Strategy | Financial, Risk & Verification | |
+| 🌍 Market Context Agent *(forex)* | Gathering | Task Manager | ● |
+| 📈 Technical Analysis Agent *(forex)* | Analysis | Market Context | |
+| 🎯 Trade Thesis Agent *(forex)* | Strategy | Technical Analysis, Risk & Verification | |
 | 👑 Chief AI Agent | Chief review | Strategy | |
 
 The Task Manager, the Risk & Verification Agent and the Chief AI cannot be
@@ -69,10 +73,19 @@ mission without them would be a chatbot with extra steps.
 ### Adding an agent
 
 One entry in `server/src/island/agents/registry.ts` and one prompt in
-`agents/prompts.ts`. A specialist needs no schema of its own — `SPECIALIST_SCHEMA`
+`agents/prompts.ts`. An agent needs no schema of its own — `SPECIALIST_SCHEMA`
 covers it, and the simulation engine derives its placeholder output from the
 schema, so nothing else in the system has to learn the new agent exists. Give it
 a `dependsOn` and the orchestrator will schedule it.
+
+Write one when the agent's output has a shape worth naming, core or not: add it
+to `SCHEMAS_BY_AGENT` and `schemaFor` hands it over. Being a specialist is about
+whether an agent is on by default and nothing else — the three forex agents are
+opt-in and have the most specific schemas in the file. A schema that exists but
+is never handed to its agent is worse than none: the prompt then describes
+fields the model is never offered, and `stripUnknown` deletes them if it
+produces them anyway. `islandContract.test.ts` asserts against the live schema
+for exactly that reason.
 
 ---
 
@@ -248,11 +261,12 @@ server/src/island/
   validate.ts         the validator, and the repair messages it produces
   config.ts           environment, and which engine is live
   agents/
-    prompts.ts        fourteen system prompts
+    prompts.ts        one system prompt per agent, over shared house rules
     registry.ts       the dependency graph, the map, the roster table
   provider/
     claude.ts         real invocation: search, forced tool call, repair loop
     simulation.ts     the honest offline engine
+  marketData.ts       the price feed: a real series, or null, and no third state
   orchestrator.ts     waves, hand-offs, the verification gate, the correction loop
   store.ts            persistence and the audit trail
   events.ts           the in-process bus behind SSE

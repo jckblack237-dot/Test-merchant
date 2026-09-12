@@ -473,8 +473,22 @@ class ForexDeskPlanner implements AgentProvider {
   }
 }
 
-function startForexMission(body: Record<string, unknown> = {}) {
-  setProvider(new ForexDeskPlanner());
+/**
+ * ForexDeskPlanner, plus a Market Context Agent that fills in `pair` as its
+ * schema asks. Nothing else changes: every agent still answers from the
+ * simulation. It exists to drive the resolver's primary path, which needs an
+ * output field a simulated agent has no reason to invent.
+ */
+class ContextNamesThePair extends ForexDeskPlanner {
+  override async run(invocation: AgentInvocation): Promise<AgentInvocationResult> {
+    const result = await super.run(invocation);
+    if (invocation.definition.id !== 'market_context') return result;
+    return { ...result, output: { ...result.output, pair: 'EUR/USD' } };
+  }
+}
+
+function startForexMission(body: Record<string, unknown> = {}, provider: AgentProvider = new ForexDeskPlanner()) {
+  setProvider(provider);
   return startMission({
     task: 'Give me a read on EUR/USD ahead of the next ECB meeting, and say what would prove it wrong.',
     agents: FOREX_ROSTER,
@@ -519,6 +533,66 @@ describe('prices, and the agents that do not get them', () => {
       }
     }
     expect(sawTechnical).toBe(true);
+  }, 40_000);
+
+  it('reads the pair the mission names, not an English compound next to it', async () => {
+    // "short-term" is two letter-runs around a separator, and a shape-only
+    // reader took it as SHORT/TERM — so a mission about EUR/USD, with the feed
+    // up and a key configured, was told there were no prices, over an
+    // instrument nobody had mentioned.
+    const calls: FetchCall[] = [];
+    setMarketDataProvider(testFeed(calls));
+
+    const mission = await startForexMission({
+      task: 'Give me a short-term, risk-free read on EUR/USD ahead of the next ECB meeting.',
+    });
+    await waitForStatus(mission.id, ['completed']);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.symbol).toBe('EUR/USD');
+  }, 40_000);
+
+  it('says on the record which pair it chose when the task names several', async () => {
+    const calls: FetchCall[] = [];
+    setMarketDataProvider(testFeed(calls));
+
+    const mission = await startForexMission({
+      task: 'Our GBP/USD book is fine. What about EUR/USD before the ECB, and what would prove it wrong?',
+    });
+    const detail = await waitForStatus(mission.id, ['completed']);
+
+    // One fetch, and the pair it passed over is in the timeline rather than in
+    // the gap between what was asked and what the report quietly answers.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.symbol).toBe('GBP/USD');
+
+    const events = detail.events as TimelineEvent[];
+    const choice = events.find((event) => event.payload.reason === 'multiple_pairs');
+    expect(choice).toBeDefined();
+    expect(choice!.payload.symbol).toBe('GBP/USD');
+    expect(choice!.payload.also_named).toEqual(['EUR/USD']);
+    expect(choice!.message).toContain('EUR/USD');
+  }, 40_000);
+
+  it('lets the agent reading the candles cite them', async () => {
+    // available_sources is a snapshot taken as the envelope is built, and the
+    // envelope forbids citing an id that is not on it. Registering the series
+    // after the envelope left the one agent that reads the prices unable to
+    // cite them, while the register listed them further down the same document.
+    setMarketDataProvider(testFeed([]));
+
+    const mission = await startForexMission();
+    const detail = await waitForStatus(mission.id, ['completed']);
+    const runs = detail.runs as { id: string; agentId: string }[];
+
+    const technical = runs.filter((run) => run.agentId === 'technical_analysis');
+    expect(technical.length).toBeGreaterThan(0);
+    for (const run of technical) {
+      const envelope = await envelopeOf(mission.id, run.id);
+      const cited = envelope.available_sources.find((source) => source.title.includes('EUR/USD'));
+      expect(cited, 'the price series is missing from the envelope that carries it').toBeDefined();
+      expect(cited!.source_id).toMatch(/^S\d+$/);
+    }
   }, 40_000);
 
   it('records the fetch in the source register and in the timeline', async () => {
@@ -578,6 +652,32 @@ describe('prices, and the agents that do not get them', () => {
 
     // Nothing was retrieved, so nothing may appear in the register.
     expect(detail.sources).toEqual([]);
+  }, 40_000);
+
+  it('fetches the pair the Market Context Agent named, when the task names none', async () => {
+    // market_context declares the pair as a field of its own output, and that
+    // is the primary source the resolver reads. It was dead code: the agent ran
+    // on the generic specialist schema, so stripUnknown deleted `pair` before
+    // the resolver ever saw it, and the fallback to the user's words was the
+    // only path that ever ran.
+    const calls: FetchCall[] = [];
+    setMarketDataProvider(testFeed(calls));
+
+    const mission = await startForexMission(
+      { task: 'Give me a read on the euro against the dollar before the ECB.' },
+      new ContextNamesThePair(),
+    );
+    const detail = await waitForStatus(mission.id, ['completed']);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.symbol).toBe('EUR/USD');
+
+    const events = detail.events as TimelineEvent[];
+    const retrieved = events.find(
+      (event) => event.agentId === 'technical_analysis' && event.payload.market_data === true,
+    );
+    expect(retrieved).toBeDefined();
+    expect(retrieved!.payload.symbol).toBe('EUR/USD');
   }, 40_000);
 
   it('says there are no prices when the mission names no pair to fetch', async () => {

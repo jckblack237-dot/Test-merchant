@@ -125,6 +125,19 @@ describe('island roster', () => {
     }
   });
 
+  it('runs every agent on its hand-written schema wherever one exists', () => {
+    // A schema in SCHEMAS_BY_AGENT that no agent is given is worse than no
+    // schema at all: the prompt describes fields the model is never offered,
+    // and stripUnknown deletes them if it produces them anyway. The generic
+    // shape is only for agents nobody has written a contract for.
+    for (const agent of AGENTS) {
+      const written = SCHEMAS_BY_AGENT[agent.id];
+      if (written) expect(agent.outputSchema, agent.id).toBe(written);
+    }
+    const orphans = Object.keys(SCHEMAS_BY_AGENT).filter((id) => !getAgent(id));
+    expect(orphans, 'schemas written for agents that do not exist').toEqual([]);
+  });
+
   it('keeps every dependency inside the roster', () => {
     for (const agent of AGENTS) {
       for (const dependency of agent.dependsOn) {
@@ -213,19 +226,31 @@ describe('the forex desk', () => {
     expect(at('risk_verification')).toBeLessThan(at('trade_thesis'));
   });
 
+  it('runs each desk agent on its own schema, not the generic specialist shape', () => {
+    // The bug this pins: schemaFor() branched on `core`, so all three of these
+    // ran on SPECIALIST_SCHEMA and price_basis/levels/pair were unreachable —
+    // while a test reading SCHEMAS_BY_AGENT directly, as the ones below used
+    // to, stayed green throughout. Assert what the agent is actually given.
+    for (const id of FOREX) {
+      const live = getAgent(id)!.outputSchema;
+      expect(live, id).toBe(SCHEMAS_BY_AGENT[id]);
+      expect(Object.keys(live.properties ?? {}), id).toContain('pair');
+    }
+  });
+
   it('lets every agent say it had no data, rather than forcing a number', () => {
-    const context = SCHEMAS_BY_AGENT.market_context!.properties!;
+    const context = getAgent('market_context')!.outputSchema.properties!;
     expect(context.data_available!.type).toBe('boolean');
     // An empty calendar is a valid answer: minItems would force an invention.
     expect(context.scheduled_events!.minItems ?? 0).toBe(0);
 
-    const technical = SCHEMAS_BY_AGENT.technical_analysis!.properties!;
+    const technical = getAgent('technical_analysis')!.outputSchema.properties!;
     expect(technical.price_basis!.properties!.live!.type).toBe('boolean');
     expect(technical.levels!.minItems ?? 0).toBe(0);
   });
 
   it('makes the thesis carry its own invalidation and its own disclaimer', () => {
-    const thesis = SCHEMAS_BY_AGENT.trade_thesis!.properties!;
+    const thesis = getAgent('trade_thesis')!.outputSchema.properties!;
     // A direction without the thing that would disprove it is not analysis.
     expect(Object.keys(thesis.invalidation!.properties!)).toEqual(
       expect.arrayContaining(['what_would_break_it', 'level', 'reasoning']),
@@ -246,7 +271,7 @@ describe('the forex desk', () => {
     };
     for (const id of FOREX) {
       const found: string[] = [];
-      walkKeys(SCHEMAS_BY_AGENT[id]!, id, found);
+      walkKeys(getAgent(id)!.outputSchema, id, found);
       // The schema is what the model fills in. Give it a box labelled "entry"
       // and it will put a number in it, whether or not it has prices.
       expect(found, `${id} must not invite an executable order`).toEqual([]);

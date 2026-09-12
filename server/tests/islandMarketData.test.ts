@@ -14,6 +14,7 @@ import type { MockInstance } from 'vitest';
 import {
   getMarketDataProvider,
   normalisePair,
+  readPair,
   setMarketDataProvider,
   TwelveDataProvider,
 } from '../src/island/marketData';
@@ -185,6 +186,34 @@ describe('normalisePair', () => {
     expect(normalisePair(null as unknown as string)).toBeNull();
     expect(normalisePair(42 as unknown as string)).toBeNull();
     expect(normalisePair({ pair: 'EUR/USD' } as unknown as string)).toBeNull();
+  });
+});
+
+describe('readPair', () => {
+  // Every one of these is the right shape — two letter-runs around a separator
+  // — and every one of them turned an ordinary sentence into an instrument
+  // before both sides had to be codes somebody quotes.
+  const prose = ['short-term', 'long-term', 'risk-free', 'top-down', 'buy-side', 'break-even'];
+
+  it.each(prose)('refuses %s, which is English and not a market', (word) => {
+    expect(readPair(word)).toBeNull();
+  });
+
+  it('still reads the pairs people actually write', () => {
+    expect(readPair('EUR/USD')).toBe('EUR/USD');
+    expect(readPair('eur-usd')).toBe('EUR/USD');
+    expect(readPair('gbpjpy')).toBe('GBP/JPY');
+    expect(readPair('BTC-USD')).toBe('BTC/USD');
+    expect(readPair('xau/usd')).toBe('XAU/USD');
+    expect(readPair('usd_cnh')).toBe('USD/CNH');
+  });
+
+  it('refuses a well-shaped code nobody quotes', () => {
+    // normalisePair takes it — an explicit symbol is the caller's to be right
+    // about, and the feed answers "no prices for that" honestly. In prose it is
+    // a false positive waiting to happen.
+    expect(normalisePair('ZZZ/USD')).toBe('ZZZ/USD');
+    expect(readPair('ZZZ/USD')).toBeNull();
   });
 });
 

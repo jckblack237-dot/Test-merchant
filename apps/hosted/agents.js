@@ -5072,33 +5072,130 @@ window.ISLAND_AGENTS = [
           "minimum": 0,
           "maximum": 1
         },
-        "domain_assessment": {
+        "pair": {
           "type": "string",
-          "description": "Your read on this mission from your speciality, in one paragraph."
+          "description": "The currency pair this concerns, e.g. \"EUR/USD\". \"\" if the task names none."
         },
-        "opportunities": {
-          "type": "array",
-          "description": "What your speciality says is possible here.",
-          "items": {
-            "type": "string"
+        "regime": {
+          "type": "object",
+          "properties": {
+            "description": {
+              "type": "string",
+              "description": "What kind of market this has been lately, in one or two sentences."
+            },
+            "direction": {
+              "type": "string",
+              "description": "The prevailing structure.",
+              "enum": [
+                "uptrend",
+                "downtrend",
+                "range",
+                "unclear"
+              ]
+            },
+            "volatility": {
+              "type": "string",
+              "description": "How much it has been moving.",
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ]
+            },
+            "confidence": {
+              "type": "number",
+              "description": "How sure you are of this reading without live prices.",
+              "minimum": 0,
+              "maximum": 1
+            }
           },
-          "maxItems": 25
+          "required": [
+            "description",
+            "direction",
+            "volatility",
+            "confidence"
+          ],
+          "additionalProperties": false
         },
-        "concerns": {
+        "drivers": {
           "type": "array",
-          "description": "What your speciality says to worry about.",
+          "description": "What is actually moving this pair.",
           "items": {
-            "type": "string"
+            "type": "object",
+            "properties": {
+              "driver": {
+                "type": "string",
+                "description": "The force acting on this pair, e.g. \"policy rate differential\"."
+              },
+              "side": {
+                "type": "string",
+                "description": "Which currency it favours.",
+                "enum": [
+                  "supports_base",
+                  "supports_quote",
+                  "unclear"
+                ]
+              },
+              "why": {
+                "type": "string",
+                "description": "The mechanism, in plain language."
+              },
+              "source_id": {
+                "type": "string",
+                "description": "Source id if you retrieved one, otherwise \"\"."
+              }
+            },
+            "required": [
+              "driver",
+              "side",
+              "why",
+              "source_id"
+            ],
+            "additionalProperties": false
           },
-          "maxItems": 25
+          "maxItems": 12
         },
-        "required_checks": {
+        "scheduled_events": {
           "type": "array",
-          "description": "What a human specialist should verify before committing.",
+          "description": "Known events ahead. If you could not retrieve a calendar, return an empty list and say so in a finding.",
           "items": {
-            "type": "string"
+            "type": "object",
+            "properties": {
+              "event": {
+                "type": "string",
+                "description": "The release or decision, e.g. \"FOMC rate decision\"."
+              },
+              "when": {
+                "type": "string",
+                "description": "Date and time with a timezone, or \"unknown\" — never guess a date."
+              },
+              "importance": {
+                "type": "string",
+                "description": "How much it typically moves this pair.",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              },
+              "source_id": {
+                "type": "string",
+                "description": "Source id if you retrieved one, otherwise \"\"."
+              }
+            },
+            "required": [
+              "event",
+              "when",
+              "importance",
+              "source_id"
+            ],
+            "additionalProperties": false
           },
-          "maxItems": 25
+          "maxItems": 12
+        },
+        "data_available": {
+          "type": "boolean",
+          "description": "False if you could not retrieve live prices or a calendar and are reasoning from training data alone. Answer honestly — the report states this to the user."
         }
       },
       "required": [
@@ -5112,10 +5209,11 @@ window.ISLAND_AGENTS = [
         "recommendations",
         "next_agent_instructions",
         "confidence",
-        "domain_assessment",
-        "opportunities",
-        "concerns",
-        "required_checks"
+        "pair",
+        "regime",
+        "drivers",
+        "scheduled_events",
+        "data_available"
       ],
       "additionalProperties": false
     }
@@ -5136,7 +5234,7 @@ window.ISLAND_AGENTS = [
       "x": 91,
       "y": 17
     },
-    "systemPrompt": "You are the Technical Analysis Agent. You read structure: trend, levels, and\nwhat the recent shape of the market suggests about where pressure sits. You do\nnot decide whether to trade — the Trade Thesis Agent does that with your read\nand the market context together.\n\n**You may not invent a price. Not one.** If you have no price feed, then\nprice_basis.live is false, levels is an empty array, and you say so in a finding.\nA support level you produced from memory is a number someone may risk money\nagainst, and you have no way to know whether it is anywhere near the market. An\nempty levels array with an honest note is a useful answer; a plausible number is\nthe single most damaging thing you could return.\n\nWhat you can do without a feed is describe structure in words — what kind of\nregime the pair has been in, what typically matters in that regime, which\nobservations would confirm or break it, and what the reader should look at on\ntheir own chart. Frame it as what to check, never as what is.\n\nWhere your read disagrees with the market context, say so in\nconflicts_with_context rather than quietly splitting the difference. A technical\npicture pointing one way while policy points the other is exactly the kind of\ntension the user needs to see.\n\nEvery signal carries the caveat that would make it wrong. A read without an\ninvalidation is an opinion, not analysis.\n\nRULES FOR EVERY AGENT ON THIS ISLAND. These override anything above them.\n\nNever fabricate. Do not invent a URL, a statistic, a company name, a price or a\ndate. A fact you cannot find is an information gap, not a guess — record it as\none. A gap the user can see is useful to them; a plausible-sounding guess is the\none failure this system cannot recover from.\n\nLabel every claim. VERIFIED only when you cite a real source you actually read.\nESTIMATE for anything you calculated, inferred or judged. NEEDS_VERIFICATION\nwhen a person must confirm it before acting on it. HIGH_RISK when claims\ncontradict each other, or when being wrong would be expensive.\n\nBe calibrated. An unsourced claim cannot sit above 0.6. You inherit the\nconfidence of any claim you carry forward: you may lower it, and you may raise\nit only by attaching new evidence and naming that evidence in the finding.\n\nChallenge what you were given. Cite the finding_id you dispute and put it in\nissues with a target_agent, a target_finding_id and a required_action. Finding\nnothing wrong is allowed, but only as a conclusion you reached by looking.\n\nReturn your work through the submit tool. Nothing you write outside that tool\ncall reaches the mission.",
+    "systemPrompt": "You are the Technical Analysis Agent. You read structure: trend, levels, and\nwhat the recent shape of the market suggests about where pressure sits. You do\nnot decide whether to trade — the Trade Thesis Agent does that with your read\nand the market context together.\n\n**You may not invent a price. Not one.**\n\nPrices reach you in the envelope, under the heading \"Live price data\", whenever\nthis server has a feed configured and the mission names a pair it can serve.\nThat section is everything you have: the symbol, the interval, when it was\nfetched, and the candles themselves. Every level you name, and every number you\nwrite that is a price, must be one you can point at in those candles, and\nprice_basis then says where they came from and how recent they are.\n\nMost of the time there are no candles, and that section says so instead. That is\nthe normal case rather than a fault — the feed is optional, most missions name\nno pair, and a fetch can fail. Whenever it says so, or is not there at all:\nprice_basis.live is false, price_basis.source says you had no price data, levels\nis an empty array, and you say so in a finding. A support level you produced\nfrom memory is a number someone may risk money against, and you have no way to\nknow whether it is anywhere near the market. An empty levels array with an\nhonest note is a useful answer; a plausible number is the single most damaging\nthing you could return.\n\nWhat you can do without candles is describe structure in words — what kind of\nregime the pair has been in, what typically matters in that regime, which\nobservations would confirm or break it, and what the reader should look at on\ntheir own chart. Frame it as what to check, never as what is.\n\nWhere your read disagrees with the market context, say so in\nconflicts_with_context rather than quietly splitting the difference. A technical\npicture pointing one way while policy points the other is exactly the kind of\ntension the user needs to see.\n\nEvery signal carries the caveat that would make it wrong. A read without an\ninvalidation is an opinion, not analysis.\n\nRULES FOR EVERY AGENT ON THIS ISLAND. These override anything above them.\n\nNever fabricate. Do not invent a URL, a statistic, a company name, a price or a\ndate. A fact you cannot find is an information gap, not a guess — record it as\none. A gap the user can see is useful to them; a plausible-sounding guess is the\none failure this system cannot recover from.\n\nLabel every claim. VERIFIED only when you cite a real source you actually read.\nESTIMATE for anything you calculated, inferred or judged. NEEDS_VERIFICATION\nwhen a person must confirm it before acting on it. HIGH_RISK when claims\ncontradict each other, or when being wrong would be expensive.\n\nBe calibrated. An unsourced claim cannot sit above 0.6. You inherit the\nconfidence of any claim you carry forward: you may lower it, and you may raise\nit only by attaching new evidence and naming that evidence in the finding.\n\nChallenge what you were given. Cite the finding_id you dispute and put it in\nissues with a target_agent, a target_finding_id and a required_action. Finding\nnothing wrong is allowed, but only as a conclusion you reached by looking.\n\nReturn your work through the submit tool. Nothing you write outside that tool\ncall reaches the mission.",
     "schema": {
       "type": "object",
       "properties": {
@@ -5380,29 +5478,117 @@ window.ISLAND_AGENTS = [
           "minimum": 0,
           "maximum": 1
         },
-        "domain_assessment": {
+        "pair": {
           "type": "string",
-          "description": "Your read on this mission from your speciality, in one paragraph."
+          "description": "The currency pair this concerns."
         },
-        "opportunities": {
-          "type": "array",
-          "description": "What your speciality says is possible here.",
-          "items": {
-            "type": "string"
+        "price_basis": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "Where the prices came from, or \"none — no price data was available\"."
+            },
+            "as_of": {
+              "type": "string",
+              "description": "Timestamp of the data, or \"unknown\"."
+            },
+            "live": {
+              "type": "boolean",
+              "description": "False when you had no live price feed."
+            }
           },
-          "maxItems": 25
+          "required": [
+            "source",
+            "as_of",
+            "live"
+          ],
+          "additionalProperties": false
         },
-        "concerns": {
+        "levels": {
           "type": "array",
-          "description": "What your speciality says to worry about.",
+          "description": "Levels that matter. With no price feed this must be empty rather than guessed.",
           "items": {
-            "type": "string"
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "description": "What kind of level this is.",
+                "enum": [
+                  "support",
+                  "resistance",
+                  "pivot"
+                ]
+              },
+              "price": {
+                "type": "string",
+                "description": "The level as a price string. \"unknown\" if you had no data — never invent one."
+              },
+              "basis": {
+                "type": "string",
+                "description": "Why this level matters: what formed it."
+              },
+              "strength": {
+                "type": "string",
+                "description": "How well it has held.",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "price",
+              "basis",
+              "strength"
+            ],
+            "additionalProperties": false
           },
-          "maxItems": 25
+          "maxItems": 12
         },
-        "required_checks": {
+        "signals": {
           "type": "array",
-          "description": "What a human specialist should verify before committing.",
+          "description": "What the structure suggests.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "The observation, e.g. \"lower highs since the April peak\"."
+              },
+              "reads": {
+                "type": "string",
+                "description": "Which way it points.",
+                "enum": [
+                  "bullish",
+                  "bearish",
+                  "neutral"
+                ]
+              },
+              "timeframe": {
+                "type": "string",
+                "description": "The timeframe it applies to, e.g. \"daily\"."
+              },
+              "caveat": {
+                "type": "string",
+                "description": "What would make this reading wrong."
+              }
+            },
+            "required": [
+              "name",
+              "reads",
+              "timeframe",
+              "caveat"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 12
+        },
+        "conflicts_with_context": {
+          "type": "array",
+          "description": "Where the technical read disagrees with the market context.",
           "items": {
             "type": "string"
           },
@@ -5420,10 +5606,11 @@ window.ISLAND_AGENTS = [
         "recommendations",
         "next_agent_instructions",
         "confidence",
-        "domain_assessment",
-        "opportunities",
-        "concerns",
-        "required_checks"
+        "pair",
+        "price_basis",
+        "levels",
+        "signals",
+        "conflicts_with_context"
       ],
       "additionalProperties": false
     }
@@ -5689,33 +5876,112 @@ window.ISLAND_AGENTS = [
           "minimum": 0,
           "maximum": 1
         },
-        "domain_assessment": {
+        "pair": {
           "type": "string",
-          "description": "Your read on this mission from your speciality, in one paragraph."
+          "description": "The currency pair."
         },
-        "opportunities": {
+        "thesis": {
+          "type": "object",
+          "properties": {
+            "direction": {
+              "type": "string",
+              "description": "Long the base currency, short it, or do nothing. \"stand_aside\" is a real answer and often the right one.",
+              "enum": [
+                "long_base",
+                "short_base",
+                "stand_aside"
+              ]
+            },
+            "reasoning": {
+              "type": "string",
+              "description": "Why, in plain language, naming the drivers it rests on."
+            },
+            "timeframe": {
+              "type": "string",
+              "description": "Over what horizon this thesis is meant to play out."
+            },
+            "conviction": {
+              "type": "number",
+              "description": "0 to 1. Without live prices this cannot honestly exceed 0.5.",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "required": [
+            "direction",
+            "reasoning",
+            "timeframe",
+            "conviction"
+          ],
+          "additionalProperties": false
+        },
+        "invalidation": {
+          "type": "object",
+          "properties": {
+            "what_would_break_it": {
+              "type": "string",
+              "description": "The specific development that would make this thesis wrong."
+            },
+            "level": {
+              "type": "string",
+              "description": "The price level that would prove it wrong, or \"unknown\" with no price data."
+            },
+            "reasoning": {
+              "type": "string",
+              "description": "Why that is the point at which the idea has failed."
+            }
+          },
+          "required": [
+            "what_would_break_it",
+            "level",
+            "reasoning"
+          ],
+          "additionalProperties": false
+        },
+        "scenarios": {
           "type": "array",
-          "description": "What your speciality says is possible here.",
+          "description": "The ways this could go, including the one where the thesis is wrong.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "scenario": {
+                "type": "string",
+                "description": "What happens."
+              },
+              "likelihood": {
+                "type": "string",
+                "description": "How likely, relative to the others.",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              },
+              "implication": {
+                "type": "string",
+                "description": "What it would mean for the thesis."
+              }
+            },
+            "required": [
+              "scenario",
+              "likelihood",
+              "implication"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 6
+        },
+        "what_to_watch": {
+          "type": "array",
+          "description": "The specific things to check before and after acting.",
           "items": {
             "type": "string"
           },
           "maxItems": 25
         },
-        "concerns": {
-          "type": "array",
-          "description": "What your speciality says to worry about.",
-          "items": {
-            "type": "string"
-          },
-          "maxItems": 25
-        },
-        "required_checks": {
-          "type": "array",
-          "description": "What a human specialist should verify before committing.",
-          "items": {
-            "type": "string"
-          },
-          "maxItems": 25
+        "not_advice": {
+          "type": "string",
+          "description": "One sentence, in your own words, stating that this is analysis rather than financial advice and that the reader is responsible for their own position sizing and risk."
         }
       },
       "required": [
@@ -5729,10 +5995,12 @@ window.ISLAND_AGENTS = [
         "recommendations",
         "next_agent_instructions",
         "confidence",
-        "domain_assessment",
-        "opportunities",
-        "concerns",
-        "required_checks"
+        "pair",
+        "thesis",
+        "invalidation",
+        "scenarios",
+        "what_to_watch",
+        "not_advice"
       ],
       "additionalProperties": false
     }
