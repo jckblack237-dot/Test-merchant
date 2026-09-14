@@ -460,15 +460,21 @@ const UNSOURCED_CEILING = 0.6;
  */
 function rosterCoverage(
   agentSummary: { agent: string; name: string; status: string }[],
+  ran: Set<string>,
 ): { ratio: number; absent: { name: string; status: string }[]; named: string } {
-  if (agentSummary.length === 0) return { ratio: 1, absent: [], named: '' };
-  const absent = agentSummary
+  // Only an agent with a run row was ever expected to report. One the Task
+  // Manager's plan left out has no row and is not a hole in the work — the
+  // mission chose not to do it — so the confidence owes nothing on its account.
+  // Counting it would tell a reader a sound mission was incomplete.
+  const expected = agentSummary.filter((entry) => ran.has(entry.agent));
+  if (expected.length === 0) return { ratio: 1, absent: [], named: '' };
+  const absent = expected
     .filter((entry) => entry.status !== 'completed')
     .map((entry) => ({ name: entry.name, status: entry.status }));
   const shown = absent.slice(0, 4).map((entry) => `${entry.name} (${entry.status})`).join(', ');
   const rest = absent.length > 4 ? ` and ${absent.length - 4} more` : '';
   return {
-    ratio: (agentSummary.length - absent.length) / agentSummary.length,
+    ratio: (expected.length - absent.length) / expected.length,
     absent,
     named: `${shown}${rest}`,
   };
@@ -509,10 +515,14 @@ function reconcileConfidence(
   }
 
   if (stated <= ceiling) return stated;
-  notes.push(
-    `The overall confidence was given as ${percent(stated)}, but ${because}, so it is shown as ` +
-      `${percent(ceiling)}.`,
-  );
+  // A correction that rounds to the figure it started from is not one a reader
+  // can see, and a sentence saying 56% became 56% reads as a mistake.
+  if (percent(stated) !== percent(ceiling)) {
+    notes.push(
+      `The overall confidence was given as ${percent(stated)}, but ${because}, so it is shown as ` +
+        `${percent(ceiling)}.`,
+    );
+  }
   return ceiling;
 }
 
@@ -618,10 +628,12 @@ export function buildFinalReport(
   const agentSummary = involved.map((agentId) => {
     const run = latest.get(agentId);
     const output = outputs.get(agentId);
-    const fromChief = agentSummaryFromChief.get(agentId);
+    // The chief may summarise an agent's work only where there is work: for a
+    // run that failed or never started, the row's own reason is the record.
+    const fromChief = run?.status === 'completed' ? agentSummaryFromChief.get(agentId) : undefined;
     let contribution = fromChief ?? '';
     if (!contribution) {
-      if (!run) contribution = 'Enabled for this mission but never ran.';
+      if (!run) contribution = 'Enabled for this mission but never selected to run, so it has no work to report.';
       else if (run.status !== 'completed') contribution = run.error ?? 'Did not finish.';
       else if (output) {
         contribution =
@@ -645,15 +657,15 @@ export function buildFinalReport(
   const gatePassed = verifier?.verification_passed === true;
   const counted = verificationFromRecord(verifications, verificationSummary, integrityNotes);
   const reconciledFindings = reconcileKeyFindings(keyFindingsFrom(chief, outputs), sources, integrityNotes);
-  const coverage = rosterCoverage(agentSummary);
+  const coverage = rosterCoverage(agentSummary, new Set(latest.keys()));
   // Said whether or not it changed a number. A mission missing a third of its
   // roster is a fact about the record, and a reader who is only told when the
   // confidence also happened to need capping learns it by coincidence.
   if (coverage.absent.length > 0) {
     integrityNotes.push(
       `${plural(coverage.absent.length, 'agent')} on this mission never reported: ${coverage.named}. ` +
-        'Nothing below rests on work they would have done, and the overall confidence is held to at ' +
-        `most ${percent(coverage.ratio)} for that reason.`,
+        'Nothing below rests on work they would have done, and on their account alone the overall ' +
+        `confidence could be no higher than ${percent(coverage.ratio)}.`,
     );
   }
   const reconciledConfidence = reconcileConfidence(

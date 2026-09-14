@@ -43,17 +43,18 @@ Two rules ported from the server's report assembly. Both are counted from the
 mission's run rows, not taken from anything an agent said about itself:
 
 - **The roster ceiling.** A mission cannot be held more confidently than the
-  share of its roster that reported. If four of twelve agents never completed,
-  the overall confidence is capped at 67% however sure the chief was, and the
-  report names the four. The note is printed whether or not it changed the
-  number: a missing third of the roster is a fact about the record, not a
-  correction.
+  share of the agents it set out to run that actually reported. If six of
+  twelve selected agents never completed, the overall confidence is capped at
+  50% however sure the chief was, and the report names them. An agent the
+  Task Manager's plan left out was never expected and is not counted. The note
+  is printed whether or not it changed the number: a missing half of the
+  roster is a fact about the record, not a correction.
 - **A failed mission still hands back its record.** When the model walks out
   mid-run, or when nothing reports at all, the mission is stored `failed` —
   and it still gets a report, built from the same empty rows the engine would
-  have read anyway: no findings, no stand-in text, confidence zero, and a
-  roster note naming every agent that never ran. Nothing is written in an
-  agent's place.
+  have read anyway: no findings, confidence zero, and a roster note naming
+  every agent that never ran. Nothing is written in an agent's voice — where a
+  section would have held an agent's work, it says that the agent did not run.
 
 Both appear under "What this report had to correct", directly beneath the
 headline confidence, so a reader cannot reach a recommendation without passing

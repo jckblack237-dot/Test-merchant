@@ -400,10 +400,14 @@ class DeadModel implements AgentProvider {
   private readonly inner = new SimulationProvider();
 
   /** Empty `kill` means every agent. `chief` overrides what the chief claims,
-   *  so the mission can be made to overreach and be caught doing it. */
+   *  so the mission can be made to overreach and be caught doing it. `plan`
+   *  makes the Task Manager select exactly these agents — an agent the plan
+   *  leaves out never runs, so it can neither fail nor be counted absent, and a
+   *  test that kills it would be testing nothing. */
   constructor(
     private readonly kill: string[] = [],
     private readonly chief?: Record<string, unknown>,
+    private readonly plan?: string[],
   ) {}
 
   async run(invocation: AgentInvocation): Promise<AgentInvocationResult> {
@@ -412,6 +416,10 @@ class DeadModel implements AgentProvider {
       throw new Error('529 Overloaded: the model service is unavailable.');
     }
     const result = await this.inner.run(invocation);
+    if (id === 'task_manager' && this.plan) {
+      const required_agents = this.plan.map((agent_id) => ({ agent_id, reason: 'needed', required: true }));
+      return { ...result, output: { ...result.output, required_agents } };
+    }
     if (id !== 'chief_ai' || !this.chief) return result;
     return { ...result, output: { ...result.output, ...this.chief } };
   }
@@ -498,17 +506,23 @@ describe('a mission that partly did not happen', () => {
     ];
     const dead = ['technology', 'legal', 'customer_research', 'operations', 'marketing'];
     const { missionId, mission } = await run(
-      new DeadModel(dead, {
-        overall_confidence: 0.97,
-        key_findings: [
-          {
-            finding: 'The north shore site clears its costs inside a quarter.',
-            evidence: [],
-            label: 'ESTIMATE',
-            confidence: 0.95,
-          },
-        ],
-      }),
+      new DeadModel(
+        dead,
+        {
+          overall_confidence: 0.97,
+          key_findings: [
+            {
+              finding: 'The north shore site clears its costs inside a quarter.',
+              evidence: [],
+              label: 'ESTIMATE',
+              confidence: 0.95,
+            },
+          ],
+        },
+        // Every agent on the roster is in the plan, so the five that are killed
+        // are ones the mission was genuinely waiting on.
+        agents.filter((id) => id !== 'task_manager'),
+      ),
       agents,
     );
     expect(mission.status).toBe('completed');
@@ -519,10 +533,11 @@ describe('a mission that partly did not happen', () => {
       .expect(200);
     const report = response.body.report;
 
-    const absent = report.agent_summary.filter(
-      (entry: { status: string }) => entry.status !== 'completed',
-    );
-    const ceiling = (report.agent_summary.length - absent.length) / report.agent_summary.length;
+    // On the server a summary entry with status 'skipped' is one with no run
+    // row: never selected, so never expected. The ceiling is over the rest.
+    const expected = report.agent_summary.filter((entry: { status: string }) => entry.status !== 'skipped');
+    const absent = expected.filter((entry: { status: string }) => entry.status !== 'completed');
+    const ceiling = (expected.length - absent.length) / expected.length;
     expect(absent.length).toBeGreaterThan(0);
     // The precondition the assertion below depends on: if the roster ceiling
     // were not the binding one, this test would pass without testing anything.
@@ -535,6 +550,46 @@ describe('a mission that partly did not happen', () => {
     const note = (report.integrity_notes as string[]).find((entry) => /never reported/.test(entry));
     expect(note, 'the report did not say which agents never reported').toBeDefined();
     expect(note).toMatch(/Technology Agent|Legal & Compliance Agent/);
+  }, 60_000);
+
+  it('does not count an agent the plan left out as one that never reported', async () => {
+    // The Task Manager narrows the roster on purpose. An agent it dropped has
+    // no run row and did no work anyone is waiting on; reading it as a hole
+    // would tell the reader a sound mission was incomplete and cut its number.
+    class PlanNarrower implements AgentProvider {
+      readonly kind = 'simulation' as const;
+      readonly label = 'Simulation whose plan needs two agents';
+      private readonly inner = new SimulationProvider();
+      async run(invocation: AgentInvocation): Promise<AgentInvocationResult> {
+        const result = await this.inner.run(invocation);
+        if (invocation.definition.id !== 'task_manager') return result;
+        return {
+          ...result,
+          output: {
+            ...result.output,
+            required_agents: ['research', 'analysis'].map((agent_id) => ({
+              agent_id,
+              reason: 'the only two this needs',
+              required: true,
+            })),
+          },
+        };
+      }
+    }
+    const agents = ['task_manager', 'research', 'competitor', 'analysis', 'technology', 'legal', 'risk_verification', 'strategy', 'chief_ai'];
+    const { missionId, mission } = await run(new PlanNarrower(), agents);
+    expect(mission.status).toBe('completed');
+
+    const response = await request(app)
+      .get(`/api/island/missions/${missionId}/report`)
+      .set(auth(merchant.ownerToken))
+      .expect(200);
+    const report = response.body.report;
+
+    const leftOut = report.agent_summary.filter((entry: { status: string }) => entry.status === 'skipped');
+    expect(leftOut.length, 'the plan was expected to leave agents out').toBeGreaterThan(0);
+    for (const entry of leftOut) expect(entry.key_contribution).toMatch(/never selected/);
+    expect(report.integrity_notes.find((entry: string) => /never reported/.test(entry))).toBeUndefined();
   }, 60_000);
 
   it('does not cap a mission whose whole roster reported', async () => {

@@ -2018,10 +2018,19 @@ window.IslandApp = (function () {
     working.forEach(function (agent) {
       stages[STAGE_LABEL[agent.stage]] = true;
     });
+    // "Every agent has reported" is a claim about the run rows, so it is read
+    // from them: a completed mission can still have agents that were expected
+    // and produced nothing, and the report above this card will have said so.
+    var gaps = crew.filter(function (agent) {
+      var run = runs[agent.id];
+      return Boolean(run) && run.status !== 'completed';
+    }).length;
     var workingNote = working.length
       ? working.length === 1 ? working[0].name : Object.keys(stages).join(' · ')
       : ended
-        ? mission.status === 'completed' ? 'Every agent has reported' : 'The mission ended early'
+        ? mission.status !== 'completed'
+          ? 'The mission ended early'
+          : gaps > 0 ? plural(gaps, 'agent') + ' did not report' : 'Every agent has reported'
         : 'No agent is running';
 
     var audit = runs.risk_verification && runs.risk_verification.output;
@@ -2036,7 +2045,8 @@ window.IslandApp = (function () {
 
     fill(missionRefs.stats, [
       stat('Working now', workingValue, workingNote),
-      stat('Completed', completed + '/' + crew.length, remaining === 0 ? 'Nothing left to run' : remaining + ' still to run'),
+      stat('Completed', completed + '/' + crew.length,
+        remaining === 0 ? 'Nothing left to run' : ended ? remaining + ' did not report' : remaining + ' still to run'),
       stat('Progress', progress + '%', finished
         ? 'All stages done'
         : mission.currentStage

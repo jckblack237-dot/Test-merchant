@@ -1862,7 +1862,10 @@ async function runMission(store: TenantStore, mission: MissionRecord, handle: Ac
         status: 'failed',
         error: reason,
         finalReport: recordOnly,
-        decision: recordOnly.recommendation.decision,
+        // The report inside still carries its recommendation, with the reason
+        // nobody reached one. The mission itself did not decide anything, and a
+        // list that printed a decision beside "failed" would say it had.
+        decision: null,
         confidence: recordOnly.overall_confidence,
         currentStage: null,
         pendingApprovalStage: null,

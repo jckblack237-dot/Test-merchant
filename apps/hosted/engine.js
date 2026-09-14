@@ -2004,6 +2004,12 @@ window.IslandEngine = (function () {
   // ---------------------------------------------------------------------------
 
   async function invokeAgent(ctx, definition, attempt, round, correction) {
+    // Claude has already been found gone by another lane of this wave, so this
+    // call would only write the same error under a second name. No run row is
+    // started: the mission loop gives this agent its skipped row, carrying the
+    // message, the same as every agent that was still queued.
+    if (ctx.modelGone) throw ctx.modelGone;
+
     const envelope = buildEnvelope(ctx, definition, correction);
     const schema = correction ? correctionSchema(definition) : definition.schema;
     const prompt = buildPrompt(definition, envelope, schema);
@@ -2041,6 +2047,21 @@ window.IslandEngine = (function () {
         status: error && error.aborted ? 'skipped' : 'failed',
         error: error && error.message ? error.message : String(error),
       });
+      if (error && error.fatal && !error.aborted) {
+        // This is the agent that found out. Its row already says failed and
+        // why; the timeline has to say so too, because the page lets the last
+        // event for an agent win, and the last one until now was "started" —
+        // which left this agent shown as working on a mission that was over.
+        ctx.modelGone = error;
+        ctx.failed.add(definition.id);
+        emit(
+          ctx,
+          'agent_failed',
+          definition.name + ' could not be reached: ' + error.message,
+          { reason: 'model_unavailable', code: error.code || '', attempt: attempt, round: round },
+          definition.id,
+        );
+      }
       throw error;
     }
   }
@@ -2890,9 +2911,14 @@ window.IslandEngine = (function () {
    * the rest; an empty roster counts as fully covered, since there is nobody to
    * be missing.
    */
-  function rosterCoverage(agentSummary) {
-    if (agentSummary.length === 0) return { ratio: 1, absent: [], named: '' };
-    const absent = agentSummary
+  function rosterCoverage(agentSummary, ran) {
+    // Only an agent with a run row was ever expected to report. One the Task
+    // Manager's plan left out has no row and is not a hole in the work — the
+    // mission chose not to do it — so the confidence owes nothing on its
+    // account. Counting it would tell a reader a sound mission was incomplete.
+    const expected = agentSummary.filter((entry) => ran.has(entry.agent));
+    if (expected.length === 0) return { ratio: 1, absent: [], named: '' };
+    const absent = expected
       .filter((entry) => entry.status !== 'completed')
       .map((entry) => ({ name: entry.name, status: entry.status }));
     const shown = absent
@@ -2901,7 +2927,7 @@ window.IslandEngine = (function () {
       .join(', ');
     const rest = absent.length > 4 ? ' and ' + (absent.length - 4) + ' more' : '';
     return {
-      ratio: (agentSummary.length - absent.length) / agentSummary.length,
+      ratio: (expected.length - absent.length) / expected.length,
       absent: absent,
       named: shown + rest,
     };
@@ -2979,9 +3005,11 @@ window.IslandEngine = (function () {
     const agentSummary = involved.map((agentId) => {
       const run = latest.get(agentId);
       const output = outputs.get(agentId);
-      let contribution = chiefContributions.get(agentId) || '';
+      // The chief may summarise an agent's work only where there is work: for a
+      // run that failed or never started, the row's own reason is the record.
+      let contribution = run && run.status === 'completed' ? chiefContributions.get(agentId) || '' : '';
       if (!contribution) {
-        if (!run) contribution = 'Enabled for this mission but never ran.';
+        if (!run) contribution = 'Enabled for this mission but never selected to run, so it has no work to report.';
         else if (run.status !== 'completed') contribution = run.error || 'Did not finish.';
         else if (output) {
           contribution =
@@ -3003,12 +3031,12 @@ window.IslandEngine = (function () {
     // a number: a mission missing a third of its roster is a fact about the
     // record, and a reader who is only told when the confidence also happened to
     // need capping learns it by coincidence.
-    const coverage = rosterCoverage(agentSummary);
+    const coverage = rosterCoverage(agentSummary, new Set(latest.keys()));
     if (coverage.absent.length > 0) {
       integrityNotes.push(
         plural(coverage.absent.length, 'agent') + ' on this mission never reported: ' + coverage.named +
-          '. Nothing below rests on work they would have done, and the overall confidence is held to ' +
-          'at most ' + percent(coverage.ratio) + ' for that reason.',
+          '. Nothing below rests on work they would have done, and on their account alone the overall ' +
+          'confidence could be no higher than ' + percent(coverage.ratio) + '.',
       );
     }
 
@@ -3020,11 +3048,15 @@ window.IslandEngine = (function () {
     // explanation below.
     let overallConfidence = Math.min(CONFIG.confidenceCeiling, statedConfidence);
     if (coverage.absent.length > 0 && coverage.ratio < overallConfidence) {
-      integrityNotes.push(
-        'The overall confidence was given as ' + percent(statedConfidence) + ', but only ' +
-          percent(coverage.ratio) + ' of this mission’s roster reported at all, so the work behind it is ' +
-          'incomplete and it is shown as ' + percent(coverage.ratio) + '.',
-      );
+      // A correction that rounds to the figure it started from is not one a
+      // reader can see, and a sentence saying 56% became 56% reads as a mistake.
+      if (percent(coverage.ratio) !== percent(overallConfidence)) {
+        integrityNotes.push(
+          'The overall confidence was given as ' + percent(statedConfidence) + ', but only ' +
+            percent(coverage.ratio) + ' of this mission’s roster reported at all, so the work behind it is ' +
+            'incomplete and it is shown as ' + percent(coverage.ratio) + '.',
+        );
+      }
       overallConfidence = coverage.ratio;
     }
 
@@ -3221,11 +3253,20 @@ window.IslandEngine = (function () {
         const reason = fatal
           ? fatal.message
           : 'Every agent on this mission failed, so it has no findings of its own to report.';
+        // Counted from the run rows, which is what the report's own roster note
+        // counts: an agent that was expected and produced nothing. ctx.failed
+        // would miss the agent that discovered the outage and include nobody
+        // the plan left out, and the two figures sit on the same screen.
+        const expected = new Set(ctx.runs.map((run) => run.agentId));
+        const absent = Array.from(expected).filter((agentId) => !ctx.outputs.has(agentId)).length;
         updateMission(ctx, {
           status: 'failed',
           error: reason,
           finalReport: report,
-          decision: report.recommendation.decision,
+          // The report inside still carries its recommendation, with the reason
+          // nobody reached one. The mission itself did not decide anything, and
+          // a list that printed a decision beside "Failed" would say it had.
+          decision: null,
           confidence: report.overall_confidence,
           currentStage: null,
           pendingApprovalStage: null,
@@ -3239,11 +3280,11 @@ window.IslandEngine = (function () {
               ? 'The report below is the record of what was attempted, and contains no conclusions.'
               : 'The report below is the record of what was attempted: it holds the work of the ' +
                 plural(ctx.outputs.size, 'agent') + ' that completed, and nothing from the ' +
-                plural(ctx.failed.size, 'agent') + ' that did not.'),
+                plural(absent, 'agent') + ' that did not.'),
           {
             code: fatal ? fatal.code || '' : '',
             agents_completed: ctx.outputs.size,
-            agents_failed: ctx.failed.size,
+            agents_failed: absent,
             findings: report.key_findings.length,
           },
         );
@@ -3460,6 +3501,10 @@ window.IslandEngine = (function () {
       outputs: new Map(),
       order: [],
       origins: new Map(),
+      // Set by the first lane to learn that Claude is gone, so a lane that was
+      // waiting at a pause when that happened does not make one more call the
+      // engine already knows will fail.
+      modelGone: null,
       claimOrigins: new Map(),
       plan: { objective: '', constraints: [], questions: [], agents: new Set(), reasons: new Map() },
       failed: new Set(),
