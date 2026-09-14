@@ -1846,8 +1846,36 @@ async function runMission(store: TenantStore, mission: MissionRecord, handle: Ac
       if (stage === 'verify') await runVerificationGate(ctx);
     }
 
+    // Nothing came back at all — usually the model service being unreachable for
+    // the whole run. The mission has failed and is recorded as failed; what it
+    // must not do is vanish. Every attempt, every error, every page the research
+    // connectors did or did not retrieve is already in the record, and that
+    // record is the report. Assembly writes it the same way it writes any other
+    // one: no agent output to draw on means no findings, no decision beyond
+    // "more research required", and a confidence of zero, each of those arrived
+    // at by the reconciliation reading empty rows rather than by anything here
+    // composing a stand-in for the work that did not happen.
     if (ctx.outputs.size === 0) {
-      throw new Error('Every agent on this mission failed, so there is nothing to report.');
+      const reason = 'Every agent on this mission failed, so it has no findings of its own to report.';
+      const recordOnly = buildFinalReport(store, mission, listRuns(store, mission.id));
+      updateMission(store, mission.id, {
+        status: 'failed',
+        error: reason,
+        finalReport: recordOnly,
+        decision: recordOnly.recommendation.decision,
+        confidence: recordOnly.overall_confidence,
+        currentStage: null,
+        pendingApprovalStage: null,
+        completedAt: nowIso(),
+      });
+      emit(
+        ctx,
+        'mission_failed',
+        `Mission ${mission.reference} failed: ${reason} The report below is the record of what was ` +
+          'attempted, and contains no conclusions.',
+        { agents_failed: ctx.failed.size, findings: 0 },
+      );
+      return;
     }
 
     const report = buildFinalReport(store, mission, listRuns(store, mission.id));

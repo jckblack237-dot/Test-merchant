@@ -172,6 +172,43 @@ building it this way rather than seeding it with plausible-looking demo data.
 
 ---
 
+## When the model goes away mid-mission
+
+The simulation engine covers *starting* without a model. The harder case is a
+live mission whose model service drops out partway through — a 529, an expired
+key, a network partition — and it is handled on the opposite principle to the
+one most systems reach for. The island **never manufactures a report for an
+agent that did not run.** There is no template, no framework prose, no
+"evidence-limited" stand-in stored as though it were the agent's own output. An
+agent that is out of attempts is recorded as failed, everything downstream of it
+is recorded as blocked, and the report is assembled from what is left.
+
+What changes is the arithmetic. Two rules stop a partial mission from reading
+like a complete one:
+
+**The roster ceiling.** A mission cannot be held more confidently than the share
+of its own roster that reported at all. Eleven agents of seventeen means the
+overall confidence is capped at 11/17, whatever the chief agent claims. The
+figure comes from counting run rows, not from asking an agent to be modest — the
+chief reading eleven handoffs has no way to notice the six that are missing,
+because a hole leaves no trace in the text it was given.
+
+**The roster note.** Every agent that never reported is named in
+`integrity_notes`, with its status, whether or not the confidence also needed
+capping. Those notes print in the report under *What this report had to
+correct*, so the artifact a person downloads carries the gap rather than only
+the screen they read it on.
+
+When *nothing* reports, the mission is marked `failed` and says why — but it
+still produces a report. That report has no findings, no sources, a
+`more_research` recommendation and a confidence of zero, every one of those
+arrived at by the reconciliation reading empty rows rather than by anything
+composing a stand-in. What it does carry is the record: which agents were
+attempted, what each one failed with, and which research connectors answered.
+A failed mission that vanishes teaches nobody anything about why it failed.
+
+---
+
 ## The API
 
 Everything lives under `/api/island` and requires a signed-in merchant staff

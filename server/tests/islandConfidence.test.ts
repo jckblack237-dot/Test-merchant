@@ -377,3 +377,178 @@ describe('what counts as new evidence', () => {
     expect(clamped, 'a fabricated citation was accepted as new evidence').toBeDefined();
   }, 40_000);
 });
+
+/**
+ * What a mission says when part of it never happened.
+ *
+ * The failure this guards against is not a crash — a crash is loud. It is the
+ * quiet one: the model service drops out for a third of the roster, the agents
+ * that did run read the handoffs they were given, notice nothing missing
+ * because a hole leaves no trace in the text, and the chief closes the mission
+ * at a confidence earned by eleven agents and printed as though it were
+ * seventeen. Nothing in the report is false. The number is still wrong.
+ *
+ * So the ceiling is computed from the run rows rather than asked for: a mission
+ * cannot be held more confidently than the share of its own roster that
+ * reported at all. And when nothing reports, the mission does not get to
+ * disappear — it fails, loudly, but it still hands back the record of what it
+ * tried.
+ */
+class DeadModel implements AgentProvider {
+  readonly kind = 'simulation' as const;
+  readonly label = 'A model service that is not there';
+  private readonly inner = new SimulationProvider();
+
+  /** Empty `kill` means every agent. `chief` overrides what the chief claims,
+   *  so the mission can be made to overreach and be caught doing it. */
+  constructor(
+    private readonly kill: string[] = [],
+    private readonly chief?: Record<string, unknown>,
+  ) {}
+
+  async run(invocation: AgentInvocation): Promise<AgentInvocationResult> {
+    const id = invocation.definition.id;
+    if (this.kill.length === 0 || this.kill.includes(id)) {
+      throw new Error('529 Overloaded: the model service is unavailable.');
+    }
+    const result = await this.inner.run(invocation);
+    if (id !== 'chief_ai' || !this.chief) return result;
+    return { ...result, output: { ...result.output, ...this.chief } };
+  }
+}
+
+describe('a mission that partly did not happen', () => {
+  let app: Express;
+  let merchant: MerchantFixture;
+  const original = getProvider();
+
+  beforeEach(async () => {
+    app = freshApp();
+    merchant = await createMerchant(app);
+  });
+  afterEach(() => setProvider(original));
+
+  async function run(provider: AgentProvider, agents?: string[]) {
+    setProvider(provider);
+    const started = await request(app)
+      .post('/api/island/missions')
+      .set(auth(merchant.ownerToken))
+      .send({ task: 'Should we open a second location on the north shore?', ...(agents ? { agents } : {}) })
+      .expect(201);
+    const missionId = started.body.mission.id as string;
+
+    let mission: Record<string, unknown> = {};
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      const detail = await request(app)
+        .get(`/api/island/missions/${missionId}`)
+        .set(auth(merchant.ownerToken))
+        .expect(200);
+      mission = detail.body.mission;
+      if (['completed', 'failed', 'aborted'].includes(String(mission.status))) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return { missionId, mission };
+  }
+
+  it('still hands back the record when every single agent failed', async () => {
+    const { missionId, mission } = await run(new DeadModel());
+
+    // It failed, and says so. The point is what survives the failure.
+    expect(mission.status).toBe('failed');
+
+    const response = await request(app)
+      .get(`/api/island/missions/${missionId}/report`)
+      .set(auth(merchant.ownerToken))
+      .expect(200);
+    const report = response.body.report;
+
+    // A report with nothing in it, which is the honest shape of a mission that
+    // learned nothing — not an absent report, and not a manufactured one.
+    expect(report.key_findings).toEqual([]);
+    expect(report.recommendation.decision).toBe('more_research');
+    expect(report.overall_confidence).toBe(0);
+    expect(report.sources).toEqual([]);
+
+    // Every agent is accounted for by name and outcome, so a reader can see
+    // what was attempted rather than inferring it from an empty page.
+    expect(report.agent_summary.length).toBeGreaterThan(0);
+    for (const entry of report.agent_summary) {
+      expect(entry.status).not.toBe('completed');
+      expect(String(entry.key_contribution)).not.toBe('');
+    }
+  }, 60_000);
+
+  it('caps the headline confidence at the share of the roster that reported', async () => {
+    // Half a roster of leaf agents is killed, so the chief still runs on what is
+    // left and still gets to overreach — which is the case worth catching. Half
+    // is also below the ceiling an unpassed verification gate already imposes,
+    // so what this asserts is the roster ceiling doing the work and not one of
+    // the ceilings that was there before it.
+    const agents = [
+      'task_manager',
+      'research',
+      'technology',
+      'legal',
+      'customer_research',
+      'operations',
+      'marketing',
+      'risk_verification',
+      'strategy',
+      'chief_ai',
+    ];
+    const dead = ['technology', 'legal', 'customer_research', 'operations', 'marketing'];
+    const { missionId, mission } = await run(
+      new DeadModel(dead, {
+        overall_confidence: 0.97,
+        key_findings: [
+          {
+            finding: 'The north shore site clears its costs inside a quarter.',
+            evidence: [],
+            label: 'ESTIMATE',
+            confidence: 0.95,
+          },
+        ],
+      }),
+      agents,
+    );
+    expect(mission.status).toBe('completed');
+
+    const response = await request(app)
+      .get(`/api/island/missions/${missionId}/report`)
+      .set(auth(merchant.ownerToken))
+      .expect(200);
+    const report = response.body.report;
+
+    const absent = report.agent_summary.filter(
+      (entry: { status: string }) => entry.status !== 'completed',
+    );
+    const ceiling = (report.agent_summary.length - absent.length) / report.agent_summary.length;
+    expect(absent.length).toBeGreaterThan(0);
+    // The precondition the assertion below depends on: if the roster ceiling
+    // were not the binding one, this test would pass without testing anything.
+    expect(ceiling).toBeLessThan(0.6);
+
+    expect(report.overall_confidence).toBeLessThanOrEqual(ceiling + 1e-9);
+
+    // And the reader is told which agents are missing, by name, rather than
+    // being left to notice that a number came down.
+    const note = (report.integrity_notes as string[]).find((entry) => /never reported/.test(entry));
+    expect(note, 'the report did not say which agents never reported').toBeDefined();
+    expect(note).toMatch(/Technology Agent|Legal & Compliance Agent/);
+  }, 60_000);
+
+  it('does not cap a mission whose whole roster reported', async () => {
+    const agents = ['task_manager', 'research', 'analysis', 'risk_verification', 'financial', 'strategy', 'chief_ai'];
+    const { missionId } = await run(new SimulationProvider(), agents);
+
+    const response = await request(app)
+      .get(`/api/island/missions/${missionId}/report`)
+      .set(auth(merchant.ownerToken))
+      .expect(200);
+    const report = response.body.report;
+
+    // The ceiling must be inert on a complete run, or it is just a tax on every
+    // mission rather than a statement about incomplete ones.
+    expect(report.integrity_notes.find((entry: string) => /never reported/.test(entry))).toBeUndefined();
+  }, 60_000);
+});

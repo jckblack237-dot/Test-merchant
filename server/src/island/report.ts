@@ -446,11 +446,40 @@ function verificationFromRecord(
  */
 const UNSOURCED_CEILING = 0.6;
 
+/**
+ * How much of the roster actually produced anything.
+ *
+ * An agent that was enabled for the mission and did not complete is a hole in
+ * the work, whatever the agents that did run went on to say about it. The
+ * island's own §16 already keeps such an agent out of the outputs and marks
+ * everything downstream of it blocked — but nothing, until now, stopped the
+ * chief from reading eleven handoffs, noticing nothing missing, and closing at
+ * 88%. A mission cannot be more confident than the share of its own roster that
+ * reported: that is a fact about the record, computed here, not a number an
+ * agent is asked to be honest about.
+ */
+function rosterCoverage(
+  agentSummary: { agent: string; name: string; status: string }[],
+): { ratio: number; absent: { name: string; status: string }[]; named: string } {
+  if (agentSummary.length === 0) return { ratio: 1, absent: [], named: '' };
+  const absent = agentSummary
+    .filter((entry) => entry.status !== 'completed')
+    .map((entry) => ({ name: entry.name, status: entry.status }));
+  const shown = absent.slice(0, 4).map((entry) => `${entry.name} (${entry.status})`).join(', ');
+  const rest = absent.length > 4 ? ` and ${absent.length - 4} more` : '';
+  return {
+    ratio: (agentSummary.length - absent.length) / agentSummary.length,
+    absent,
+    named: `${shown}${rest}`,
+  };
+}
+
 function reconcileConfidence(
   stated: number,
   findings: ReportKeyFinding[],
   sources: SourceRecord[],
   gatePassed: boolean,
+  coverage: ReturnType<typeof rosterCoverage>,
   notes: string[],
 ): number {
   let ceiling = 1;
@@ -470,6 +499,13 @@ function reconcileConfidence(
   if (!gatePassed && UNSOURCED_CEILING < ceiling) {
     ceiling = UNSOURCED_CEILING;
     because = 'the verification gate did not pass';
+  }
+
+  if (coverage.absent.length > 0 && coverage.ratio < ceiling) {
+    ceiling = coverage.ratio;
+    because =
+      `only ${percent(coverage.ratio)} of this mission's roster reported at all, so the work behind ` +
+      'it is incomplete';
   }
 
   if (stated <= ceiling) return stated;
@@ -604,16 +640,28 @@ export function buildFinalReport(
   const recommendation = recommendationFrom(chief, strategy);
 
   // --- reconciliation ------------------------------------------------------
-  // Everything above this line is what the mission said about itself. These
-  // four lines are where the record gets to answer back.
+  // Everything above this line is what the mission said about itself. This is
+  // where the record gets to answer back.
   const gatePassed = verifier?.verification_passed === true;
   const counted = verificationFromRecord(verifications, verificationSummary, integrityNotes);
   const reconciledFindings = reconcileKeyFindings(keyFindingsFrom(chief, outputs), sources, integrityNotes);
+  const coverage = rosterCoverage(agentSummary);
+  // Said whether or not it changed a number. A mission missing a third of its
+  // roster is a fact about the record, and a reader who is only told when the
+  // confidence also happened to need capping learns it by coincidence.
+  if (coverage.absent.length > 0) {
+    integrityNotes.push(
+      `${plural(coverage.absent.length, 'agent')} on this mission never reported: ${coverage.named}. ` +
+        'Nothing below rests on work they would have done, and the overall confidence is held to at ' +
+        `most ${percent(coverage.ratio)} for that reason.`,
+    );
+  }
   const reconciledConfidence = reconcileConfidence(
     chief ? asNumber(chief.overall_confidence, derivedConfidence) : derivedConfidence,
     reconciledFindings,
     sources,
     gatePassed,
+    coverage,
     integrityNotes,
   );
 
