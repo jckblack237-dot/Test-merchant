@@ -22,6 +22,7 @@ import { nowIso } from '../lib/time';
 import { getAgent, planWaves, requireAgent } from './agents/registry';
 import { islandConfig } from './config';
 import { getMarketDataProvider, normalisePair, readPair, type PriceSeries } from './marketData';
+import { fetchResearchSources, type ResearchSource } from './research';
 import { getProvider } from './provider';
 import { buildFinalReport } from './report';
 import { CORRECTION_SCHEMA } from './schemas';
@@ -238,6 +239,11 @@ interface MissionContext {
    *  or a correction round re-reads the same candles rather than paying for a
    *  second fetch and telling the timeline about it twice. */
   marketAttempted: Set<string>;
+  research: Map<string, ResearchSource[]>;
+  /** Same one-attempt-per-agent discipline as the price feed: a retry or a
+   *  correction round re-reads what was retrieved rather than hitting four
+   *  public sites again and narrating it twice. */
+  researchAttempted: Set<string>;
   plan: MissionPlan;
   failed: Set<string>;
   selected: string[];
@@ -373,6 +379,7 @@ function buildEnvelope(
   definition: AgentDefinition,
   correction?: CorrectionRequest,
   marketData?: PriceSeries,
+  research?: ResearchSource[],
 ): MissionEnvelope {
   const dependencies = definition.dependsOn
     .map((id) => ctx.outputs.get(id))
@@ -403,6 +410,7 @@ function buildEnvelope(
     // did not ask for a feed must not find one in its envelope and start
     // reasoning about numbers nobody sent it to check.
     ...(marketData ? { market_data: marketData } : {}),
+    ...(research && research.length ? { research_sources: research } : {}),
     ...(correction ? { correction } : {}),
     instructions: instructionsFor(ctx, definition),
   };
@@ -841,6 +849,152 @@ function registerMarketSource(
   ]);
 }
 
+/**
+ * Retrieves the research connectors for the one agent that asked for them.
+ *
+ * Unlike the price feed, which is a number or nothing, this reports every
+ * connector it tried — including the ones that failed. An agent handed only the
+ * successes cannot tell a thin evidence base from a complete one, and an agent
+ * that cannot tell will fill the silence.
+ */
+async function resolveResearch(
+  ctx: MissionContext,
+  definition: AgentDefinition,
+): Promise<ResearchSource[] | undefined> {
+  if (!definition.needsResearch) return undefined;
+  if (ctx.researchAttempted.has(definition.id)) return ctx.research.get(definition.id);
+  ctx.researchAttempted.add(definition.id);
+
+  // Nothing is retrieved for a mission no model will read.
+  //
+  // The simulation engine's entire promise is that nothing on the mission was
+  // researched. Fetching four government sites anyway would make that false in
+  // the most misleading possible way: the report would carry real, citable,
+  // freshly retrieved sources beside findings that are placeholder text, and a
+  // reader would reasonably connect the two. A mission that retrieved nothing
+  // and says so is honest; one that retrieved real pages nobody read, and shows
+  // them next to invented findings, is not. It also spares those servers a
+  // request per simulated run.
+  if (ctx.provider.kind === 'simulation') {
+    emit(
+      ctx,
+      'log',
+      `No sources were retrieved for ${definition.name}: this mission is running on the simulation ` +
+        'engine, which reads nothing. Configure an API key to let the research connectors run.',
+      { research: false, reason: 'simulation_engine' },
+      definition.id,
+    );
+    return undefined;
+  }
+
+  let sources: ResearchSource[];
+  try {
+    sources = await fetchResearchSources(ctx.handle.controller.signal);
+  } catch (error) {
+    // An aborted mission ends here as anywhere; anything else degrades this
+    // agent rather than the mission.
+    ensureLive(ctx.handle);
+    const message = error instanceof Error ? error.message : String(error);
+    emit(
+      ctx,
+      'log',
+      `No sources were retrieved for ${definition.name}: the research connectors could not be reached ` +
+        `(${message}). It works from what it already knows and must say so.`,
+      { research: false, reason: 'fetch_failed', error: message },
+      definition.id,
+    );
+    return undefined;
+  }
+
+  if (sources.length === 0) {
+    emit(
+      ctx,
+      'log',
+      `No sources were retrieved for ${definition.name}: this server has no research connectors ` +
+        'configured. It works from what it already knows and must say so.',
+      { research: false, reason: 'no_connectors' },
+      definition.id,
+    );
+    return undefined;
+  }
+
+  ctx.research.set(definition.id, sources);
+
+  const retrieved = sources.filter((source) => source.status === 'retrieved');
+  const blocked = sources.filter((source) => source.status === 'auth_required');
+  const failed = sources.filter((source) => source.status === 'unavailable');
+
+  // One event, naming every outcome. A connector that needed a credential is
+  // reported as loudly as one that answered, because a silently missing source
+  // is how a thin report comes to look complete.
+  emit(
+    ctx,
+    'log',
+    `Retrieved ${plural(retrieved.length, 'source')} of ${sources.length} for ${definition.name}` +
+      (blocked.length ? `; ${plural(blocked.length, 'source')} needs a credential this server does not have` : '') +
+      (failed.length ? `; ${plural(failed.length, 'source')} could not be reached` : '') +
+      '.',
+    {
+      research: retrieved.length > 0,
+      retrieved: retrieved.length,
+      auth_required: blocked.length,
+      unavailable: failed.length,
+      connectors: sources.map((source) => ({
+        id: source.connectorId,
+        status: source.status,
+        http_status: source.httpStatus ?? null,
+        response_ms: source.responseMs ?? null,
+        note: source.note ?? '',
+      })),
+    },
+    definition.id,
+  );
+
+  // Named individually so the reason is actionable rather than a count.
+  for (const source of blocked) {
+    emit(
+      ctx,
+      'log',
+      `${source.title} was not read: ${source.note ?? 'it needs a credential this server does not have.'}`,
+      { research: false, reason: 'auth_required', connector: source.connectorId },
+      definition.id,
+    );
+  }
+
+  return sources;
+}
+
+/**
+ * Puts the retrieved pages in the mission's source register.
+ *
+ * Only `retrieved` connectors go in. That is the whole point: report.ts refuses
+ * a VERIFIED label to a claim whose citations are not in this register, so a
+ * connector that returned auth_required or a 503 must not become something a
+ * finding can lean on. It is on the timeline instead, where a gap belongs.
+ */
+function registerResearchSources(
+  ctx: MissionContext,
+  runId: string | null,
+  agentId: string,
+  sources: ResearchSource[],
+): SourceRecord[] {
+  const retrieved = sources.filter((source) => source.status === 'retrieved');
+  if (retrieved.length === 0) return [];
+  return recordSources(
+    ctx.store,
+    ctx.mission.id,
+    runId,
+    agentId,
+    retrieved.map((source) => ({
+      source_id: '',
+      title: `${source.title} — retrieved ${source.retrievedAt}`,
+      url: source.url,
+      source_type: source.sourceType === 'official_api' ? 'other' : 'official',
+      reliability: source.reliability,
+    })),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Running one agent (§4, §16)
 // ---------------------------------------------------------------------------
@@ -867,6 +1021,7 @@ async function invokeAgent(
   // Fetched before the envelope is built, so the candles are part of the exact
   // input this run is stored with and "why did it say that?" stays answerable.
   const marketData = await resolveMarketData(ctx, definition);
+  const research = await resolveResearch(ctx, definition);
 
   // Registered before the envelope too, and for the same reason. The envelope's
   // available_sources is a snapshot taken as it is built, and the envelope tells
@@ -878,8 +1033,9 @@ async function invokeAgent(
   // envelope as its stored input. That costs nothing real: the series is fetched
   // once per mission and shared, and the title carries the full provenance.
   const marketSources = marketData ? registerMarketSource(ctx, null, definition.id, marketData) : [];
+  const researchSources = research ? registerResearchSources(ctx, null, definition.id, research) : [];
 
-  const envelope = buildEnvelope(ctx, definition, correction, marketData);
+  const envelope = buildEnvelope(ctx, definition, correction, marketData, research);
   const schema = correction ? CORRECTION_SCHEMA(definition.id) : definition.outputSchema;
   const run = startRun(ctx.store, ctx.mission.id, definition.id, attempt, round, envelope);
 
@@ -921,7 +1077,7 @@ async function invokeAgent(
       output,
       // The feed counts among the sources this agent worked from, so it travels
       // in the hand-off with everything else it read.
-      sources: [...marketSources, ...sources],
+      sources: [...marketSources, ...researchSources, ...sources],
       notes: result.notes,
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
@@ -1619,6 +1775,8 @@ async function runMission(store: TenantStore, mission: MissionRecord, handle: Ac
     claimOrigins: new Map(),
     marketData: new Map(),
     marketAttempted: new Set(),
+    research: new Map(),
+    researchAttempted: new Set(),
     plan: { objective: '', constraints: [], questions: [], agents: new Set(), reasons: new Map() },
     failed: new Set(),
     selected: [],

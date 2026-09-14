@@ -13,6 +13,7 @@
  * confidence without attaching new evidence.
  */
 import type { PriceSeries } from './marketData';
+import type { ResearchSource } from './research';
 
 /** The four labels the whole system uses to grade a claim (never hide doubt). */
 export type Label = 'VERIFIED' | 'ESTIMATE' | 'NEEDS_VERIFICATION' | 'HIGH_RISK';
@@ -223,6 +224,10 @@ export interface MissionEnvelope {
   /** Real prices, when a feed is configured and the mission concerns a pair.
    *  Absent means no feed — which the agent must report rather than paper over. */
   market_data?: PriceSeries;
+  /** Pages the server retrieved for this agent, each carrying the status of its
+   *  own retrieval. Absent means no connector ran — which the agent must report
+   *  as a gap rather than fill in. */
+  research_sources?: ResearchSource[];
   /** Present only on a correction round. */
   correction?: CorrectionRequest;
   instructions: string;
@@ -249,6 +254,11 @@ export interface AgentDefinition {
    *  the one agent whose job is unanswerable without them; every other agent's
    *  envelope stays free of prices it never asked to reason about. */
   needsMarketData?: boolean;
+  /** Should the orchestrator retrieve the configured research connectors before
+   *  this agent runs? Set on the one agent whose job is gathering evidence; an
+   *  agent that did not ask to read the web should not find pages in its
+   *  envelope and start treating them as its own findings. */
+  needsResearch?: boolean;
   /** Agent to fall back to if this one fails repeatedly (§16). Usually none. */
   backupAgentId?: string;
   systemPrompt: string;

@@ -54,6 +54,17 @@ export const islandConfig = {
    * runs exactly as it does without a feed at all, and the Technical Analysis
    * Agent reports having no prices rather than producing a level from memory.
    */
+  research: {
+    /** JSON array of ResearchConnector, overriding the shipped Maldives list.
+     *  A deployment serving another market points this somewhere else rather
+     *  than editing the source. */
+    connectors: textFromEnv('RESEARCH_CONNECTORS'),
+    /** A connector the orchestrator is waiting on must not hang a mission. */
+    timeoutMs: intFromEnv('RESEARCH_TIMEOUT_MS', 9_000, 1_000),
+    /** Characters of stripped text kept per page: enough for a statistics table
+     *  to survive, few enough that four of them still fit in one envelope. */
+    maxChars: intFromEnv('RESEARCH_MAX_CHARS', 18_000, 1_000),
+  },
   marketData: {
     provider: textFromEnv('MARKET_DATA_PROVIDER') ?? 'twelvedata',
     apiKey: textFromEnv('MARKET_DATA_API_KEY'),

@@ -252,6 +252,41 @@ that never comes.
 
 ---
 
+## Research connectors
+
+The island had one way to learn anything it did not already know: the model's
+own web search, which needs an API key. Without one, no mission had ever
+retrieved a page, and every source in every report was something a model said
+existed.
+
+`server/src/island/research.ts` is the other way. A connector names a specific
+public page up front, fetches it, and reports one of exactly three outcomes:
+
+| Outcome | Content | Citable | On the timeline |
+|---|---|---|---|
+| `retrieved` | the stripped text | yes — it enters the source register | how many, how long |
+| `unavailable` | none | no | why it failed |
+| `auth_required` | none | no | which env var, and where to get a token |
+
+The third is where most systems quietly lie. A connector needing a credential it
+does not have reports `auth_required` and names the page a token comes from. It
+does not guess what the source would have said, and it does not drop itself from
+the record so the gap goes unnoticed.
+
+Only `retrieved` connectors become citable sources, and that is what makes this
+more than plumbing. `report.ts` refuses a VERIFIED label to any claim whose
+citations are not in the mission's source register — so before connectors
+existed, VERIFIED was unreachable by construction. Now a claim can earn it.
+
+Connectors run only under a real engine. Under the simulation engine nothing is
+fetched, because a report carrying freshly retrieved sources beside placeholder
+findings invites exactly the misreading the whole system exists to prevent.
+
+The shipped list is Maldives statistics, since that is the market LoyaltyLoop
+serves. `RESEARCH_CONNECTORS` overrides it; see `.env.example`.
+
+---
+
 ## Where things are
 
 ```
@@ -266,6 +301,7 @@ server/src/island/
   provider/
     claude.ts         real invocation: search, forced tool call, repair loop
     simulation.ts     the honest offline engine
+  research.ts         the connectors: pages actually retrieved, and the gaps named
   marketData.ts       the price feed: a real series, or null, and no third state
   orchestrator.ts     waves, hand-offs, the verification gate, the correction loop
   store.ts            persistence and the audit trail

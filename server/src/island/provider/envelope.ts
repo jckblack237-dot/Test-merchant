@@ -13,6 +13,7 @@
  * the whole point of a dependency's output is that it arrives unedited.
  */
 import type { PriceSeries } from '../marketData';
+import { formatResearchContext } from '../research';
 import type { AgentDefinition, Finding, Handoff, MissionEnvelope, SourceRecord } from '../types';
 
 /** The house rules, appended to every agent's own prompt. */
@@ -201,6 +202,16 @@ function renderMarketData(series: PriceSeries): string {
 /** What an agent that asked for prices is told when there are none. The reason
  *  is in the mission timeline; what matters here is that it never reads as an
  *  invitation to supply the numbers itself. */
+const NO_RESEARCH = [
+  'Nothing was retrieved for this mission. No page was opened on your behalf, and there are no',
+  'sources in this envelope.',
+  '',
+  'This is a normal state, not a fault: the connectors are optional and a fetch can fail. Say so.',
+  'Everything you write is therefore from your own prior knowledge, which means none of it is',
+  'VERIFIED and none of it may cite a source. Name the gaps a person would have to close, rather',
+  'than closing them yourself with something that sounds right.',
+].join('\n');
+
 const NO_MARKET_DATA = [
   'No price data reached this mission, so there are no prices in this envelope at all.',
   '',
@@ -261,6 +272,13 @@ export function buildUserMessage(definition: AgentDefinition, envelope: MissionE
     blocks.push(section('Live price data', renderMarketData(market)));
   } else if (definition.needsMarketData) {
     blocks.push(section('Live price data', NO_MARKET_DATA));
+  }
+
+  const research = envelope.research_sources;
+  if (research?.length) {
+    blocks.push(section('Pages retrieved for you', formatResearchContext(research)));
+  } else if (definition.needsResearch) {
+    blocks.push(section('Pages retrieved for you', NO_RESEARCH));
   }
 
   if (envelope.research_questions.length) {

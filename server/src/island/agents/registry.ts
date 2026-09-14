@@ -33,6 +33,7 @@ interface AgentSpec {
   core: boolean;
   webSearch?: boolean;
   needsMarketData?: boolean;
+  needsResearch?: boolean;
   x: number;
   y: number;
 }
@@ -77,6 +78,7 @@ function define(spec: AgentSpec): AgentDefinition {
     enabledByDefault: spec.core,
     webSearch: spec.webSearch ?? false,
     needsMarketData: spec.needsMarketData ?? false,
+    needsResearch: spec.needsResearch ?? false,
     systemPrompt: promptFor(spec.id),
     outputSchema: schemaFor(spec.id, spec.core),
     map: { x: spec.x, y: spec.y },
@@ -108,6 +110,10 @@ export const AGENTS: AgentDefinition[] = [
     dependsOn: ['task_manager'],
     core: true,
     webSearch: true,
+    // The one agent whose job is unanswerable without evidence, so the one that
+    // gets the connectors retrieved for it. Every other agent reasons from what
+    // this one filed and the register it cites.
+    needsResearch: true,
     x: 22,
     y: 9,
   }),
