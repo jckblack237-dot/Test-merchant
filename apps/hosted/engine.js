@@ -1047,6 +1047,28 @@ window.IslandEngine = (function () {
       ),
     );
 
+    // The Research Agent's prompt is the server's, and it tells the agent to
+    // read this section first. On the server it holds the pages the connectors
+    // fetched, or says that none could be. Here it can only ever say the latter:
+    // a published page cannot make an outbound request of any kind, so the
+    // heading is kept — the prompt refers to it by name — and what sits under
+    // it is the truth of this deployment, in the same NO_RESEARCH register the
+    // server uses when its connectors return nothing.
+    if (definition.id === 'research') {
+      blocks.push(
+        section(
+          'Pages retrieved for you',
+          [
+            'NO_RESEARCH — nothing was retrieved for this mission, and nothing could have been. This',
+            'island runs inside a published web page that cannot make an outbound request, so there',
+            'are no connectors here and no web search. Treat that as the state of the evidence: every',
+            'fact you write is from your own training, none of it may be labelled VERIFIED, and none',
+            'of it may carry a source.',
+          ].join('\n'),
+        ),
+      );
+    }
+
     if (envelope.research_questions.length) {
       blocks.push(
         section(
@@ -2123,6 +2145,36 @@ window.IslandEngine = (function () {
   }
 
   /**
+   * Every agent that was still waiting for its turn when Claude went away.
+   *
+   * Each one gets a run row — status `skipped`, the error being the message
+   * Claude gave — and a line in the timeline, so the report's roster names it
+   * by what happened to it rather than showing a blank where its work would
+   * have been. An agent that already has a row is left alone: it either
+   * finished before the model went, or it is the one that found out. Nothing is
+   * retried. The codes that reach here (`not_granted`, the SAMPLE_GONE set,
+   * `rate_limited` once the back-off has already been spent) all mean this view
+   * will not reach Claude again during this mission, and asking once more would
+   * only write the same error under another name.
+   */
+  function markModelUnavailable(ctx, agentIds, fatal) {
+    for (const agentId of agentIds) {
+      if (ctx.runs.some((run) => run.agentId === agentId)) continue;
+      const definition = requireAgent(agentId);
+      const run = startRun(ctx, definition, 1, 0, buildEnvelope(ctx, definition, null), 0);
+      finishRun(ctx, run, { status: 'skipped', error: fatal.message });
+      ctx.failed.add(definition.id);
+      emit(
+        ctx,
+        'agent_skipped',
+        definition.name + ' never ran: ' + fatal.message,
+        { reason: 'model_unavailable', code: fatal.code || '' },
+        definition.id,
+      );
+    }
+  }
+
+  /**
    * Runs a wave with at most `limit` agents in flight.
    *
    * Every lane is awaited even when one of them throws, because an abort that
@@ -2132,6 +2184,11 @@ window.IslandEngine = (function () {
   async function runPool(items, limit, worker) {
     const errors = [];
     let cursor = 0;
+    // Raised the moment a lane learns that Claude is gone. The lanes still in a
+    // call finish it, but nobody picks up another item: every agent left in the
+    // queue would only make the same doomed call, and the mission loop is what
+    // gives each of them a run row saying it never got its turn.
+    let halted = false;
 
     const lanes = [];
     const laneCount = Math.min(Math.max(1, limit), items.length);
@@ -2139,12 +2196,14 @@ window.IslandEngine = (function () {
       lanes.push(
         (async () => {
           for (;;) {
+            if (halted) return;
             const item = items[cursor];
             cursor += 1;
             if (item === undefined) return;
             try {
               await worker(item);
             } catch (error) {
+              if (error && error.fatal) halted = true;
               errors.push(error);
             }
           }
@@ -2155,6 +2214,10 @@ window.IslandEngine = (function () {
 
     const aborted = errors.find((error) => error && error.aborted);
     if (aborted) throw aborted;
+    // Claude being gone outranks whatever else went wrong in the wave: it is
+    // the error the mission loop knows how to keep a record of.
+    const fatal = errors.find((error) => error && error.fatal);
+    if (fatal) throw fatal;
     if (errors.length > 0) throw errors[0];
   }
 
@@ -2815,6 +2878,35 @@ window.IslandEngine = (function () {
       .sort((a, b) => a.priority - b.priority);
   }
 
+  /**
+   * How much of the roster actually reported.
+   *
+   * An agent that fails, is blocked, or never gets its turn leaves a hole the
+   * chief's summary cannot see: it reads the hand-offs it was given, notices
+   * nothing missing, and closes at whatever figure it likes. A mission cannot
+   * be more confident than the share of its own roster that reported, so the
+   * share is computed here from the run rows and handed to the report as a
+   * ceiling and as a note. Up to four of the absent are named, with a count for
+   * the rest; an empty roster counts as fully covered, since there is nobody to
+   * be missing.
+   */
+  function rosterCoverage(agentSummary) {
+    if (agentSummary.length === 0) return { ratio: 1, absent: [], named: '' };
+    const absent = agentSummary
+      .filter((entry) => entry.status !== 'completed')
+      .map((entry) => ({ name: entry.name, status: entry.status }));
+    const shown = absent
+      .slice(0, 4)
+      .map((entry) => entry.name + ' (' + entry.status + ')')
+      .join(', ');
+    const rest = absent.length > 4 ? ' and ' + (absent.length - 4) + ' more' : '';
+    return {
+      ratio: (agentSummary.length - absent.length) / agentSummary.length,
+      absent: absent,
+      named: shown + rest,
+    };
+  }
+
   function buildFinalReport(ctx) {
     const mission = ctx.mission;
     const outputs = ctx.outputs;
@@ -2861,10 +2953,17 @@ window.IslandEngine = (function () {
     const derivedConfidence = completed.length
       ? completed.reduce((total, output) => total + output.confidence, 0) / completed.length
       : 0;
-    const statedConfidence = chief ? asNumber(chief.overall_confidence, derivedConfidence) : derivedConfidence;
-    // The ceiling applies to the report as it applies to every claim inside it:
-    // an unretrieved mission cannot hand back a confident answer.
-    const overallConfidence = Math.min(CONFIG.confidenceCeiling, clamp01(statedConfidence));
+    const statedConfidence = clamp01(
+      chief ? asNumber(chief.overall_confidence, derivedConfidence) : derivedConfidence,
+    );
+
+    // Every place assembly had to overrule what the mission said about itself
+    // because the record did not support it. Printed in the report rather than
+    // applied quietly: a correction the reader cannot see is just a different
+    // agent's word for it, and the point of holding the report to the record is
+    // that the reader no longer has to take anyone's word. Always present on
+    // the report, and empty when there was nothing to say.
+    const integrityNotes = [];
 
     const chiefContributions = new Map();
     for (const raw of asArray(chief && chief.agent_summary)) {
@@ -2897,6 +2996,37 @@ window.IslandEngine = (function () {
         key_contribution: contribution,
       };
     });
+
+    // --- the roster ceiling ---------------------------------------------------
+    // Everything above this line is what the mission said about itself. This is
+    // where the record gets to answer back. It is said whether or not it changes
+    // a number: a mission missing a third of its roster is a fact about the
+    // record, and a reader who is only told when the confidence also happened to
+    // need capping learns it by coincidence.
+    const coverage = rosterCoverage(agentSummary);
+    if (coverage.absent.length > 0) {
+      integrityNotes.push(
+        plural(coverage.absent.length, 'agent') + ' on this mission never reported: ' + coverage.named +
+          '. Nothing below rests on work they would have done, and the overall confidence is held to ' +
+          'at most ' + percent(coverage.ratio) + ' for that reason.',
+      );
+    }
+
+    // The retrieval ceiling applies to the report as it applies to every claim
+    // inside it: an unretrieved mission cannot hand back a confident answer. The
+    // roster ceiling composes with it rather than replacing it — the lower of
+    // the two wins — and only the roster's is written up as a note here, because
+    // the retrieval ceiling is already explained in full in the confidence
+    // explanation below.
+    let overallConfidence = Math.min(CONFIG.confidenceCeiling, statedConfidence);
+    if (coverage.absent.length > 0 && coverage.ratio < overallConfidence) {
+      integrityNotes.push(
+        'The overall confidence was given as ' + percent(statedConfidence) + ', but only ' +
+          percent(coverage.ratio) + ' of this mission’s roster reported at all, so the work behind it is ' +
+          'incomplete and it is shown as ' + percent(coverage.ratio) + '.',
+      );
+      overallConfidence = coverage.ratio;
+    }
 
     const checkedForConsistency = ctx.verifications.filter((record) => record.status === 'checked').length;
     const verificationRounds = ctx.runs.filter(
@@ -2955,6 +3085,7 @@ window.IslandEngine = (function () {
       retrieval: 'none',
       retrieval_notice: NO_RETRIEVAL_NOTICE,
       simulation_notice: '',
+      integrity_notes: integrityNotes,
     };
   }
 
@@ -2998,80 +3129,147 @@ window.IslandEngine = (function () {
         throw new Error('This mission has no island agents enabled, so there is nothing to run.');
       }
 
-      let stageRan = false;
-      if (roster.includes('task_manager')) {
-        emit(ctx, 'stage_started', STAGE_LABEL.plan + ' started.', { stage: 'plan' });
-        await gate(handle);
-        await runStandardAgent(ctx, requireAgent('task_manager'), 0);
-        readPlan(ctx);
-        stageRan = true;
-      }
-
-      ctx.selected = narrowRoster(ctx, roster);
-      updateMission(ctx, { status: 'running' });
-
-      for (const stage of STAGE_ORDER) {
-        if (stage === 'plan') continue;
-        const inStage = ctx.selected.filter((id) => requireAgent(id).stage === stage);
-        if (inStage.length === 0) continue;
-
-        await gate(handle);
-        if (stageRan) await awaitApproval(ctx, stage);
-        stageRan = true;
-        updateMission(ctx, { status: 'running', currentStage: stage, pendingApprovalStage: null });
-        emit(ctx, 'stage_started', STAGE_LABEL[stage] + ' started with ' + plural(inStage.length, 'agent') + '.', {
-          stage: stage,
-          agents: inStage,
-        });
-
-        for (const wave of planWaves(inStage)) {
-          for (const agentId of wave) {
-            emit(ctx, 'agent_queued', requireAgent(agentId).name + ' is queued.', { stage: stage }, agentId);
-          }
-          await runPool(wave, CONFIG.maxConcurrentAgents, async (agentId) => {
-            await gate(handle);
-            const definition = requireAgent(agentId);
-            const missing = definition.dependsOn.filter(
-              (dependency) => ctx.selected.includes(dependency) && !ctx.outputs.has(dependency),
-            );
-            if (missing.length > 0) {
-              markBlocked(ctx, definition, missing);
-              return;
-            }
-            await runStandardAgent(ctx, definition, 0);
-          });
+      // Everything an agent does happens inside this inner try. Claude going
+      // away part-way through — the page's grant revoked, the session expired, a
+      // rate limit that a back-off did not clear — ends the agents, and it ends
+      // them here rather than unwinding to the outer catch, because that catch
+      // stores a failure with no report, and a mission whose model walked out on
+      // it still has a record: every run row written so far, every error, and
+      // now a row for each agent that never got its turn. Nothing is retried
+      // past this point. An abort is not a fatal, whatever else was in flight
+      // when it landed, and keeps its own branch in the outer catch.
+      let fatal = null;
+      try {
+        let stageRan = false;
+        if (roster.includes('task_manager')) {
+          emit(ctx, 'stage_started', STAGE_LABEL.plan + ' started.', { stage: 'plan' });
+          await gate(handle);
+          await runStandardAgent(ctx, requireAgent('task_manager'), 0);
+          readPlan(ctx);
+          stageRan = true;
         }
 
-        if (stage === 'verify') await runVerificationGate(ctx);
+        ctx.selected = narrowRoster(ctx, roster);
+        updateMission(ctx, { status: 'running' });
+
+        for (const stage of STAGE_ORDER) {
+          if (stage === 'plan') continue;
+          const inStage = ctx.selected.filter((id) => requireAgent(id).stage === stage);
+          if (inStage.length === 0) continue;
+
+          await gate(handle);
+          if (stageRan) await awaitApproval(ctx, stage);
+          stageRan = true;
+          updateMission(ctx, { status: 'running', currentStage: stage, pendingApprovalStage: null });
+          emit(ctx, 'stage_started', STAGE_LABEL[stage] + ' started with ' + plural(inStage.length, 'agent') + '.', {
+            stage: stage,
+            agents: inStage,
+          });
+
+          for (const wave of planWaves(inStage)) {
+            for (const agentId of wave) {
+              emit(ctx, 'agent_queued', requireAgent(agentId).name + ' is queued.', { stage: stage }, agentId);
+            }
+            await runPool(wave, CONFIG.maxConcurrentAgents, async (agentId) => {
+              await gate(handle);
+              const definition = requireAgent(agentId);
+              const missing = definition.dependsOn.filter(
+                (dependency) => ctx.selected.includes(dependency) && !ctx.outputs.has(dependency),
+              );
+              if (missing.length > 0) {
+                markBlocked(ctx, definition, missing);
+                return;
+              }
+              await runStandardAgent(ctx, definition, 0);
+            });
+          }
+
+          if (stage === 'verify') await runVerificationGate(ctx);
+        }
+      } catch (error) {
+        const isFatal = Boolean(error && error.fatal);
+        if (!isFatal || (error && error.aborted) || handle.controller.signal.aborted) throw error;
+        fatal = error;
+        emit(
+          ctx,
+          'log',
+          'Claude went away before the mission finished, so no further agent will run. What completed ' +
+            'is kept, what did not is recorded as such, and the report is assembled from that.',
+          { code: fatal.code || '' },
+        );
+        // Before the Task Manager has narrowed the roster there is no selection
+        // yet, and the agents that would have run are the whole enabled roster.
+        markModelUnavailable(ctx, ctx.selected.length ? ctx.selected : roster, fatal);
       }
 
-      if (ctx.outputs.size === 0) {
-        throw new Error('Every agent on this mission failed, so there is nothing to report.');
-      }
-
+      // Assembly runs whatever happened above, on whatever the record holds. A
+      // mission nothing came back from — usually the model service being
+      // unreachable for the whole run — has failed and is recorded as failed;
+      // what it must not do is vanish. Every attempt and every error is already
+      // in the record, and that record is the report. Assembly writes it the
+      // same way it writes any other one: no agent output to draw on means no
+      // findings, no decision beyond "more research required", and a confidence
+      // of zero, each of those arrived at by reading empty rows rather than by
+      // anything here composing a stand-in for the work that did not happen.
       const report = buildFinalReport(ctx);
       saveReport(mission.id, report);
-      updateMission(ctx, {
-        status: 'completed',
-        finalReport: report,
-        decision: report.recommendation.decision,
-        confidence: report.overall_confidence,
-        currentStage: null,
-        pendingApprovalStage: null,
-        completedAt: nowIso(),
-        error: null,
-      });
-      emit(
-        ctx,
-        'mission_completed',
-        'Mission ' + mission.reference + ' finished: ' + report.recommendation.decision.replace(/_/g, ' ') +
-          ' at ' + percent(report.overall_confidence) + ' confidence, none of it retrieved.',
-        {
+
+      if (fatal || ctx.outputs.size === 0) {
+        // A mission the model walked out of is a failed mission that still
+        // hands back its record, and so is one where every agent failed on its
+        // own. Whichever it was, the report is stored with it.
+        const reason = fatal
+          ? fatal.message
+          : 'Every agent on this mission failed, so it has no findings of its own to report.';
+        updateMission(ctx, {
+          status: 'failed',
+          error: reason,
+          finalReport: report,
           decision: report.recommendation.decision,
           confidence: report.overall_confidence,
-          unresolved: report.unresolved_issues.length,
-        },
-      );
+          currentStage: null,
+          pendingApprovalStage: null,
+          completedAt: nowIso(),
+        });
+        emit(
+          ctx,
+          'mission_failed',
+          'Mission ' + mission.reference + ' failed: ' + reason + ' ' +
+            (ctx.outputs.size === 0
+              ? 'The report below is the record of what was attempted, and contains no conclusions.'
+              : 'The report below is the record of what was attempted: it holds the work of the ' +
+                plural(ctx.outputs.size, 'agent') + ' that completed, and nothing from the ' +
+                plural(ctx.failed.size, 'agent') + ' that did not.'),
+          {
+            code: fatal ? fatal.code || '' : '',
+            agents_completed: ctx.outputs.size,
+            agents_failed: ctx.failed.size,
+            findings: report.key_findings.length,
+          },
+        );
+      } else {
+        updateMission(ctx, {
+          status: 'completed',
+          finalReport: report,
+          decision: report.recommendation.decision,
+          confidence: report.overall_confidence,
+          currentStage: null,
+          pendingApprovalStage: null,
+          completedAt: nowIso(),
+          error: null,
+        });
+        emit(
+          ctx,
+          'mission_completed',
+          'Mission ' + mission.reference + ' finished: ' + report.recommendation.decision.replace(/_/g, ' ') +
+            ' at ' + percent(report.overall_confidence) + ' confidence, none of it retrieved.',
+          {
+            decision: report.recommendation.decision,
+            confidence: report.overall_confidence,
+            unresolved: report.unresolved_issues.length,
+          },
+        );
+      }
     } catch (error) {
       const aborted = (error && error.aborted) || handle.controller.signal.aborted;
       if (aborted) {

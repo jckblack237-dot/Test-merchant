@@ -234,7 +234,7 @@ window.IslandApp = (function () {
   }
 
   var CEILING_NOTE =
-    'Held at 60%: nothing on this island was retrieved, so no claim behind this number carries a source.';
+    'Never above 60%: nothing on this island was retrieved, so no claim behind this number carries a source.';
 
   /* --- small DOM helpers --------------------------------------------------- */
 
@@ -2447,6 +2447,38 @@ window.IslandApp = (function () {
     return h('section', { 'class': 'card report__section' }, [heading(title), children]);
   }
 
+  /**
+   * Every place assembly overruled an agent because the record did not support
+   * it — a roster that never fully reported, a confidence above what the mission
+   * earned. The engine writes these notes; this prints them, in full, in the
+   * order they were written.
+   *
+   * The section sits directly under the headline number, because that is the
+   * figure most likely to have been corrected and the worst one to correct
+   * quietly. A reader who sees 0% is entitled to know that the roster never
+   * reported, and to read it before the recommendation rather than after. When
+   * there is nothing to say the section is not drawn at all: an empty card
+   * headed "had to correct" would suggest a check that did not happen.
+   *
+   * Reports stored before the field existed carry none. A missing field is read
+   * as an empty list rather than as a separate state, because it means the same
+   * thing — assembly had nothing to say — and the alternative is a second
+   * branch that draws something different for older missions for no reason a
+   * reader would recognise.
+   */
+  function integrityNotesSection(report) {
+    var notes = Array.isArray(report.integrity_notes) ? report.integrity_notes : [];
+    if (notes.length === 0) return null;
+    return reportSection('What this report had to correct', [
+      eyebrow('The record overruled its agents in ' + (notes.length === 1 ? 'one place' : notes.length + ' places')),
+      small(
+        'Assembly checked what each agent claimed against what the mission recorded. Where the two ' +
+        'disagreed the record was used, and the disagreement is listed here rather than settled out of sight.'
+      ),
+      bullets(notes, 'Nothing had to be corrected.'),
+    ]);
+  }
+
   function reportView(mission, report) {
     var currency = (report.financial_summary && report.financial_summary.currency) || mission.currency || 'USD';
     var decision = report.recommendation ? report.recommendation.decision : 'more_research';
@@ -2476,6 +2508,10 @@ window.IslandApp = (function () {
           (report.confidence_explanation ? report.confidence_explanation + ' ' : '') + CEILING_NOTE,
         ),
       ]),
+
+      // Before the summary, so a reader cannot reach a recommendation without
+      // passing what had to be corrected on the way to it.
+      integrityNotesSection(report),
 
       reportSection('1. Executive summary', h('p', { 'class': 'prose', text: report.executive_summary })),
 
