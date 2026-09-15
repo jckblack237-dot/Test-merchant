@@ -1,0 +1,83 @@
+<title>AI Agent Island</title>
+<link rel="stylesheet" href="island.css">
+
+<!--
+  The shell only. Every screen below is filled in by app.js, with one
+  exception: the disclosure at the top of the page is written here, in the
+  markup, so that it is on screen before a single line of script has run and
+  stays there if the script never runs at all. It is the one thing on this page
+  that must not depend on anything.
+-->
+<div id="root">
+  <div class="app">
+    <header class="app__nav">
+      <a class="app__brand" href="#" data-view="control">
+        <span class="app__mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true" focusable="false">
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M12.2 3.2C16.7 3.2 20.8 6.1 20.8 10.4C20.8 15.7 16.5 20.8 11.4 20.8C6.8 20.8 3.2 17 3.2 12.4C3.2 7.1 7.5 3.2 12.2 3.2ZM12 9.1C10.4 9.1 9.1 10.4 9.1 12C9.1 13.6 10.4 14.9 12 14.9C13.6 14.9 14.9 13.6 14.9 12C14.9 10.4 13.6 9.1 12 9.1Z" />
+          </svg>
+        </span>
+        AI Agent Island
+      </a>
+
+      <nav class="app__links" id="app-links">
+        <a class="app__link" href="#" data-view="control" aria-current="page">Mission control</a>
+        <a class="app__link" href="#" data-view="history">Missions</a>
+      </nav>
+
+      <span class="app__spacer"></span>
+      <span class="app__user" id="app-engine"></span>
+    </header>
+
+    <main class="app__main">
+      <div class="sim-notice" role="alert">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6"
+          stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false" style="flex: none">
+          <path d="M12 4.4L21 19.8H3Z" />
+          <path d="M12 10V13.9M12 16.7H12.01" />
+        </svg>
+        <div class="stack stack--sm">
+          <strong>Nothing on this island was retrieved. There is no web access and no price feed.</strong>
+          <span>
+            Every agent here is Claude reasoning from what it already knows. No page was opened, no
+            register was searched, no rate was looked up. Every name, number, cost, date and quote
+            below is a starting point for you to check — not a finding. Nothing can be marked
+            verified, and every confidence is held at 60% or below for that reason.
+          </span>
+        </div>
+      </div>
+
+      <noscript>
+        <div class="alert" role="alert">
+          This page runs the island in your browser, so it needs JavaScript. Without it you can read
+          the notice above and nothing else.
+        </div>
+      </noscript>
+
+      <section id="screen-control" class="stack stack--lg"></section>
+      <section id="screen-mission" class="stack stack--lg" hidden></section>
+      <section id="screen-history" class="stack" hidden></section>
+    </main>
+
+    <footer class="app__footer">
+      Every agent run, every challenge and every correction is recorded as it happens. Nothing in a
+      report is written after the fact — and nothing in one was looked up.
+    </footer>
+  </div>
+</div>
+
+<script src="agents.js"></script>
+<script src="engine.js"></script>
+<script src="app.js"></script>
+<script>
+  // app.js is the last script in the body, so the DOM is already parsed by the
+  // time this runs. The guard is for the one case where it is not: a browser
+  // that defers or re-orders these tags.
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () {
+      window.IslandApp.start();
+    });
+  } else {
+    window.IslandApp.start();
+  }
+</script>

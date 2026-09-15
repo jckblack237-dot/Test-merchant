@@ -1,0 +1,65 @@
+# Render — optional. Create a Blueprint from this file.
+#
+# Keys are from the current Blueprint spec: `runtime` (which replaced the
+# deprecated `env`), `autoDeployTrigger` (which replaced `autoDeploy`), and a
+# single `disk`. Anything not verifiable in the spec was left out rather than
+# guessed — docs/DEPLOYMENT.md lists what and why.
+
+services:
+  - type: web
+    name: loyaltyloop
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    # Disks need a paid instance type; a free instance cannot mount one, and
+    # without the disk the database is gone at the end of every deploy.
+    plan: '0.5c-512mb'
+    region: oregon
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+
+    disk:
+      name: loyaltyloop-data
+      mountPath: /data
+      sizeGB: 3
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Render sets PORT itself (10000 by default) and the server reads it
+      # either way; pinning it keeps the container and the image agreeing.
+      - key: PORT
+        value: '4000'
+      - key: DATABASE_PATH
+        value: /data/loyaltyloop.sqlite
+      # Which built frontend this process serves. The image carries all three;
+      # one per container, for the reason in docs/DEPLOYMENT.md.
+      - key: PUBLIC_DIR
+        value: /app/public/island
+      # Replace with the URL Render assigns — it appends a suffix when the
+      # service name is already taken. A wrong value here fails every non-GET
+      # call with a 500 that reads as a server fault.
+      - key: CORS_ORIGINS
+        value: https://loyaltyloop.onrender.com
+
+      # 256-bit base64: past the 32-character floor, and never the development
+      # default the server refuses to boot on.
+      - key: ACCESS_TOKEN_SECRET
+        generateValue: true
+      - key: REFRESH_TOKEN_SECRET
+        generateValue: true
+      - key: QR_TOKEN_SECRET
+        generateValue: true
+
+      # Prompted for once, at Blueprint creation. Leaving either blank is a
+      # supported deployment: no model key runs the island on the simulation
+      # engine, and no market data key means the technical agent reports having
+      # no prices. Both say so in the report rather than papering over it.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: MARKET_DATA_API_KEY
+        sync: false
+
+      # A spending control. See the budget section of docs/DEPLOYMENT.md.
+      - key: ISLAND_MISSIONS_PER_DAY
+        value: '5'

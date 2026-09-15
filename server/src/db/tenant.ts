@@ -24,11 +24,23 @@ export const TENANT_TABLES = new Set([
   'campaigns',
   'api_keys',
   'audit_logs',
+  // AI Agent Island. The agent roster itself is platform-global (product code,
+  // no merchant_id); everything a mission produces is merchant-owned.
+  'island_missions',
+  'island_agent_runs',
+  'island_sources',
+  'island_verifications',
+  'island_corrections',
+  'island_events',
+  'island_followups',
+  'island_agent_settings',
 ]);
 
 export type TenantTable =
   | 'merchant_users' | 'locations' | 'products' | 'tiers' | 'memberships'
-  | 'rewards' | 'redemptions' | 'transactions' | 'campaigns' | 'api_keys' | 'audit_logs';
+  | 'rewards' | 'redemptions' | 'transactions' | 'campaigns' | 'api_keys' | 'audit_logs'
+  | 'island_missions' | 'island_agent_runs' | 'island_sources' | 'island_verifications'
+  | 'island_corrections' | 'island_events' | 'island_followups' | 'island_agent_settings';
 
 type Row = Record<string, unknown>;
 type Params = Record<string, unknown>;

@@ -1,3 +1,4 @@
+import path from 'node:path';
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
@@ -8,6 +9,7 @@ import { authRouter } from './routes/auth';
 import { publicRouter } from './routes/public';
 import { customerRouter } from './routes/customer';
 import { merchantRouter } from './routes/merchant';
+import { islandRouter } from './routes/island';
 
 export function createApp() {
   const app = express();
@@ -55,6 +57,17 @@ export function createApp() {
   app.use('/api/auth', authRouter);
   app.use('/api/customer', customerRouter);
   app.use('/api/merchant', merchantRouter);
+  app.use('/api/island', islandRouter);
+
+  // In a single-container deployment this process also serves one built
+  // frontend. It is mounted after the API so a route can never shadow an
+  // endpoint, and /api keeps its JSON 404 rather than being handed index.html.
+  if (config.publicDir) {
+    app.use(express.static(config.publicDir, { index: false, maxAge: '1h' }));
+    app.get(/^(?!\/api(?:\/|$)).*/, (_req, res) => {
+      res.sendFile(path.join(config.publicDir as string, 'index.html'));
+    });
+  }
 
   app.use(notFoundHandler);
   app.use(errorHandler);

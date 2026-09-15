@@ -60,6 +60,31 @@ enumeration is not viable. And a lookup that misses returns **404, not 403** —
 because 403 confirms the id is real, which lets a competitor map another
 merchant's customer count by probing.
 
+### The AI Agent Island
+
+A mission is a merchant writing down, in their own words, what they are thinking
+of building, and getting back a costed strategy for it. That makes it the most
+sensitive thing the platform stores, and it is scoped exactly like everything
+else: `island_missions`, `island_agent_runs`, `island_sources`,
+`island_verifications`, `island_corrections`, `island_events`,
+`island_followups` and `island_agent_settings` all carry a `merchant_id`, are
+registered in `TENANT_TABLES`, and are reached only through `TenantStore`. The
+boot-time check above covers them without needing to know they exist.
+
+Two island-specific decisions worth stating:
+
+- **Point-of-sale API keys are refused.** A till key exists to award points. It
+  has no business reading a merchant's strategy or spending their model budget,
+  so `/api/island` requires a signed-in staff account and turns keys away.
+- **The agent roster is deliberately global.** `island_agents` holds the prompts
+  and the dependency graph. That is product code, identical for every merchant,
+  and it carries no `merchant_id`. Only the per-merchant on/off switches, in
+  `island_agent_settings`, are tenant data.
+
+`tests/islandIsolation.test.ts` hands one merchant another merchant's real
+mission id, run id and a valid token, and proves every read, control and delete
+comes back 404.
+
 ### The one deliberately global table
 
 `customers` is not tenant-scoped, on purpose: one person has one login and can
