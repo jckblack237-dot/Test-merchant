@@ -112,18 +112,26 @@ export const DEFAULT_CONNECTORS: ResearchConnector[] = [
 /** Markup out, text in. Script and style bodies go first, or their contents
  *  arrive as prose and the agent reads CSS as evidence. */
 export function stripMarkup(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
-    .replace(/\s+/g, ' ')
-    .trim();
+  return (
+    html
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&quot;/gi, '"')
+      // Numeric references — a statistics site writes its dashes, apostrophes
+      // and ampersands as &#8211; &#8217; &#038; — must be decoded generically,
+      // or the model reads "Act &#038; Regulation" as evidence. Found the first
+      // time a page was actually retrieved rather than imagined.
+      .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
+      .replace(/&#(\d+);/g, (_, dec: string) => String.fromCodePoint(parseInt(dec, 10)))
+      // Last, so an escaped entity (&amp;#39;) is unescaped once, not twice.
+      .replace(/&amp;/gi, '&')
+      .replace(/\s+/g, ' ')
+      .trim()
+  );
 }
 
 function configuredConnectors(): ResearchConnector[] {

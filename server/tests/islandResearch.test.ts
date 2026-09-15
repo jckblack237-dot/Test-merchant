@@ -35,6 +35,13 @@ describe('stripMarkup', () => {
   it('decodes the entities a statistics page actually uses', () => {
     expect(stripMarkup('<td>MVR&nbsp;1,200</td><td>a&amp;b</td>')).toBe('MVR 1,200 a&b');
     expect(stripMarkup('<p>&quot;quoted&quot; &#39;single&#39;</p>')).toBe('"quoted" \'single\'');
+    // Seen verbatim on statisticsmaldives.gov.mv the first time it was fetched
+    // for real: the site writes its dashes and ampersands as numeric references.
+    expect(stripMarkup('Monthly Statistics &#8211; Bureau; Act &#038; Regulation; it&#8217;s &#x41;')).toBe(
+      'Monthly Statistics – Bureau; Act & Regulation; it’s A',
+    );
+    // An entity that was itself escaped is unescaped exactly once.
+    expect(stripMarkup('&amp;#39;')).toBe('&#39;');
   });
 
   it('collapses the whitespace a stripped table leaves behind', () => {
